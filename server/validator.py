@@ -8,6 +8,8 @@ from server.models import ReferenceEntry, CitationSite, ValidationVerdict, Usage
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CoScientistAuditor/1.0"
 CROSSREF_API = "https://api.crossref.org/works"
+EUROPE_PMC_REST = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+OPENALEX_REST = "https://api.openalex.org/works"
 PUBMED_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 TIMEOUT = 6
@@ -113,7 +115,7 @@ def query_crossref(doi: str) -> Dict:
         return {}
 
 def check_title_similarity(target_title: str, candidate_title: str) -> float:
-    """Compute word overlap ratio between reference title and candidate title."""
+    """Compute Jaccard word overlap ratio between reference title and candidate title."""
     if not target_title or not candidate_title:
         return 0.0
     clean_target = set(re.findall(r'\b[a-z]{3,}\b', target_title.lower()))
@@ -121,7 +123,8 @@ def check_title_similarity(target_title: str, candidate_title: str) -> float:
     if not clean_target or not clean_cand:
         return 0.0
     common = clean_target.intersection(clean_cand)
-    return len(common) / min(len(clean_target), len(clean_cand))
+    union = clean_target.union(clean_cand)
+    return len(common) / len(union)
 
 def search_crossref_bibliographic(raw_text: str, title: str = "", authors: List[str] = None) -> Tuple[str, Dict]:
     """
@@ -148,33 +151,120 @@ def search_crossref_bibliographic(raw_text: str, title: str = "", authors: List[
                 if doi and score >= 40:
                     if title and len(title) > 15:
                         sim = check_title_similarity(title, top_title)
-                        if sim < 0.45:
+                        if sim < 0.50:
                             return "", {}
                     return doi, top
     except Exception:
         pass
     return "", {}
 
+def search_europepmc_bibliographic(raw_text: str, title: str = "") -> Tuple[str, Dict]:
+    """
+    Search EMBL-EBI Europe PMC REST API for missing DOI.
+    Fast, authoritative index of 40M+ biomedical records.
+    """
+    clean_title = re.sub(r'["\r\n]', ' ', title).strip() if title else ""
+    query_candidates = []
+    if clean_title and len(clean_title) > 15:
+        query_candidates.append(f'TITLE:"{clean_title}"')
+    
+    clean_raw = re.sub(r'^\d+\.\s*', '', raw_text).strip() if raw_text else ""
+    if clean_raw and len(clean_raw) > 20:
+        query_candidates.append(clean_raw[:180])
+
+    for q in query_candidates:
+        params = {"query": q, "resultType": "lite", "pageSize": 1, "format": "json"}
+        try:
+            r = requests.get(EUROPE_PMC_REST, params=params, timeout=TIMEOUT)
+            if r.status_code == 200:
+                data = r.json()
+                results = data.get("resultList", {}).get("result", [])
+                if results:
+                    top = results[0]
+                    doi = top.get("doi", "")
+                    top_title = top.get("title", "")
+                    if doi:
+                        if title and len(title) > 15:
+                            sim = check_title_similarity(title, top_title)
+                            if sim < 0.50:
+                                continue
+                        return doi, top
+        except Exception:
+            continue
+    return "", {}
+
+def search_openalex_bibliographic(raw_text: str, title: str = "") -> Tuple[str, Dict]:
+    """
+    Search OpenAlex open scholarly graph for missing DOI.
+    """
+    query_str = title if (title and len(title) > 15) else re.sub(r'^\d+\.\s*', '', raw_text).strip()
+    if not query_str or len(query_str) < 15:
+        return "", {}
+    params = {"search": query_str[:200], "per-page": 1}
+    try:
+        r = requests.get(OPENALEX_REST, params=params, timeout=TIMEOUT)
+        if r.status_code == 200:
+            results = r.json().get("results", [])
+            if results:
+                top = results[0]
+                doi_url = top.get("doi", "")
+                doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", doi_url, flags=re.IGNORECASE) if doi_url else ""
+                top_title = top.get("title", "")
+                if doi:
+                    if title and len(title) > 15:
+                        sim = check_title_similarity(title, top_title)
+                        if sim < 0.50:
+                            return "", {}
+                    return doi, top
+    except Exception:
+        pass
+    return "", {}
+
+def search_multi_registry_bibliographic(raw_text: str, title: str = "", authors: List[str] = None) -> Tuple[str, str, Dict]:
+    """
+    High-Throughput Multi-Registry Missing DOI Resolver:
+    1. EMBL-EBI Europe PMC (Biomedical primary, fastest)
+    2. OpenAlex (Global multidisciplinary graph)
+    3. Crossref Bibliographic Matcher (Publisher registry fallback)
+    Returns: (doi, registry_name, meta_dict)
+    """
+    # 1. Europe PMC
+    doi, meta = search_europepmc_bibliographic(raw_text, title)
+    if doi:
+        return doi, "Europe PMC", meta
+
+    # 2. OpenAlex
+    doi, meta = search_openalex_bibliographic(raw_text, title)
+    if doi:
+        return doi, "OpenAlex", meta
+
+    # 3. Crossref
+    doi, meta = search_crossref_bibliographic(raw_text, title, authors)
+    if doi:
+        return doi, "Crossref", meta
+
+    return "", "", {}
+
 def validate_single_reference(ref: ReferenceEntry) -> ValidationVerdict:
     notes = []
     doi = ref.doi
     is_recovered = False
     
-    # If DOI is missing from reference line, attempt automatic recovery via Crossref
+    # If DOI is missing from reference line, attempt automatic recovery via multi-registry engine
     if not doi:
-        recovered_doi, cr_recovered = search_crossref_bibliographic(ref.raw_text, ref.title, ref.authors)
+        recovered_doi, registry_name, reg_meta = search_multi_registry_bibliographic(ref.raw_text, ref.title, ref.authors)
         if recovered_doi:
             ref.doi = recovered_doi
             doi = recovered_doi
             is_recovered = True
-            notes.append(f"Auto-resolved missing DOI via Crossref registry: {recovered_doi}")
+            notes.append(f"Auto-resolved missing DOI via {registry_name} registry: {recovered_doi}")
         else:
             return ValidationVerdict(
                 ref_num=ref.ref_num,
                 status="missing_doi",
                 is_reachable=False,
                 is_recovered_doi=False,
-                notes=["No DOI detected in reference line and no match found in registry."]
+                notes=["No DOI detected in reference line and no match found in scholarly registries."]
             )
 
     # 1. Reachability & Bot Verification Check

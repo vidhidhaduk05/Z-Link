@@ -178,28 +178,54 @@ async function handleFileSelected(file) {
   metricCitations.textContent = appState.parsedData.sites.length;
   metricReferences.textContent = appState.parsedData.references.length;
 
+  // Display active format profile
+  const formatNames = {
+    sup: "Superscript (AMA / Nature)",
+    bracket: "Square Brackets [1, 2]",
+    paren: "Parentheses (1, 2)",
+    mixed: "Mixed (Superscripts & Parens)",
+    punct_sup: "Punctuation Superscript"
+  };
+  const fmtKey = appState.parsedData.detectedFormat || selectedFormat;
+  const fmtDisplay = formatNames[fmtKey] || fmtKey || "Auto-Profiled";
+  const citSub = document.querySelector("#metricCitations + .metric-sub") || document.querySelectorAll(".metric-card .metric-sub")[0];
+  if (citSub) {
+    citSub.innerHTML = `Format: <strong>${fmtDisplay}</strong> (Prose Protected)`;
+  }
+
   appState.verdicts = {};
   let reachableCount = 0;
   let botGatedCount = 0;
   let brokenCount = 0;
 
-  // Process references concurrently
-  const validationPromises = appState.parsedData.references.map(async (ref) => {
-    const verdict = await validateReferenceCrossref(ref.doi, ref.raw_text, ref.title);
-    appState.verdicts[ref.ref_num] = verdict;
-    if (verdict.is_recovered && verdict.recovered_doi) {
-      ref.doi = verdict.recovered_doi;
+  // Process references through a concurrency-controlled queue to respect registry rate limits
+  const CONCURRENCY_LIMIT = 3;
+  const refsQueue = [...appState.parsedData.references];
+
+  async function validationWorker() {
+    while (refsQueue.length > 0) {
+      const ref = refsQueue.shift();
+      if (!ref) break;
+      const verdict = await validateReferenceCrossref(ref.doi, ref.raw_text, ref.title);
+      appState.verdicts[ref.ref_num] = verdict;
+      if (verdict.is_recovered && verdict.recovered_doi) {
+        ref.doi = verdict.recovered_doi;
+      }
+      if (verdict.status === 'verified' || verdict.status === 'recovered') reachableCount++;
+      else if (verdict.status === 'bot_protected' || verdict.is_bot_gated) botGatedCount++;
+      else if (verdict.status === 'unreachable') brokenCount++;
+
+      metricReachable.textContent = reachableCount;
+      if (metricBotGated) metricBotGated.textContent = botGatedCount;
+      metricBroken.textContent = brokenCount;
+
+      // Polite 80ms interval
+      await new Promise(r => setTimeout(r, 80));
     }
-    if (verdict.status === 'verified' || verdict.status === 'recovered') reachableCount++;
-    else if (verdict.status === 'bot_protected' || verdict.is_bot_gated) botGatedCount++;
-    else if (verdict.status === 'unreachable') brokenCount++;
+  }
 
-    metricReachable.textContent = reachableCount;
-    if (metricBotGated) metricBotGated.textContent = botGatedCount;
-    metricBroken.textContent = brokenCount;
-  });
-
-  await Promise.all(validationPromises);
+  const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, refsQueue.length) }, () => validationWorker());
+  await Promise.all(workers);
 
   // 3. Sentence & Usage Mapping
   appState.fsmState = 'MAPPING';
@@ -296,7 +322,8 @@ function renderAuditTable() {
     if (v.status === 'recovered' || v.is_recovered) {
       badgeClass = 'recovered';
       badgeText = '🔍 DOI Recovered';
-      autoRecoveredPill = `<span class="badge-auto-recovered" title="Automatically matched and verified via Crossref registry">Auto-Found</span>`;
+      const regSource = v.recovery_source || "Registry";
+      autoRecoveredPill = `<span class="badge-auto-recovered" title="Automatically matched and verified via ${regSource}">Auto-Found (${regSource})</span>`;
       if (ref.doi) {
         actionBtnHtml = `<a href="https://doi.org/${encodeURIComponent(ref.doi)}" target="_blank" class="btn-open-ext" title="Verify auto-recovered DOI landing">Verify ↗</a>`;
       }

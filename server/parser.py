@@ -14,6 +14,11 @@ SUP_CIT = re.compile(r'^\d{1,3}(?:[,-]\d{1,3})*$')
 REF_START = re.compile(r'^(\d{1,3})\.\s+(.*)$')
 REF_HEADER = re.compile(r'^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$', re.I)
 BODY_START = re.compile(r'^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|Introduction|BACKGROUND|Key Results)\s*$', re.I)
+POST_REF_HEADER = re.compile(
+    r'^(Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)',
+    re.I
+)
+YEAR_RE = re.compile(r'\b(19\d\d|20\d\d)\b')
 
 EXPONENT_PREV_CHARS = set('RrχτIβtfzp')
 EXPONENT_PREV_WORDS = ('cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th')
@@ -107,6 +112,90 @@ def extract_surrounding_sentence(para_text: str, match_start: int, match_end: in
         cur_pos = s_end + 1
     return para_text[:120].strip()
 
+def is_likely_reference_line(line: str) -> bool:
+    """Ensure candidate reference line is not a section header (e.g. '1. Introduction')."""
+    clean = line.strip()
+    if not clean:
+        return False
+    # If contains DOI or PMID, definitely a reference
+    if DOI_RE.search(clean) or FALLBACK_DOI_RE.search(clean) or PMID_RE.search(clean):
+        return True
+    # If contains year (19xx or 20xx)
+    if YEAR_RE.search(clean):
+        return True
+    # Typical bibliographic delimiters: journal volume, 'et al.', semicolons/colons with page numbers
+    if 'et al' in clean.lower() or ';' in clean or ':' in clean:
+        return True
+    # If it's short and lacks bibliographic markers, it's likely a section heading or table row
+    words = clean.split()
+    if len(words) <= 6:
+        return False
+    return True
+
+def profile_document_citation_format(
+    para_texts: List[str],
+    doc: Optional[docx.Document] = None,
+    scan_end: int = 0
+) -> str:
+    """
+    Pass 1: Profile manuscript citation format across body paragraphs.
+    Counts superscript runs, square brackets [1, 2], and sentence parens (1, 2).
+    Returns dominant style: 'sup', 'bracket', or 'paren' (or 'mixed' if both sup & paren are prominent).
+    """
+    sup_count = 0
+    bracket_count = 0
+    paren_count = 0
+
+    if doc is not None:
+        for pi in range(min(scan_end, len(doc.paragraphs))):
+            p_obj = doc.paragraphs[pi]
+            combined = ""
+            for r in p_obj.runs:
+                r_txt = r.text or ""
+                if is_superscript(r) and SUP_CIT.match(r_txt):
+                    prev_char = combined[-1:] if combined else ""
+                    if prev_char and not prev_char.isdigit():
+                        if not (prev_char in EXPONENT_PREV_CHARS and r_txt in ('2', '3', '4')) and not any(combined.rstrip().lower().endswith(w) for w in EXPONENT_PREV_WORDS):
+                            sup_count += 1
+                combined += r_txt
+
+    for pi in range(min(scan_end, len(para_texts))):
+        p_text = para_texts[pi]
+        if not p_text.strip():
+            continue
+        # Brackets
+        for m in BRACKET_CIT.finditer(p_text):
+            inner = m.group(1).replace('–', '-')
+            parts = [p.strip() for p in re.split(r'\s*,\s*', inner) if p.strip()]
+            if parts and all(re.match(r'^\d{1,3}(?:-\d{1,3})?$', pt) for pt in parts):
+                bracket_count += 1
+        # Parens (applying clinical scale guards)
+        for m in PAREN_CIT.finditer(p_text):
+            prior = p_text[:m.start()].rstrip()
+            if CLASSIFICATION_NOUNS.search(prior) or CLINICAL_SCALE_RE.search(prior[-60:]):
+                continue
+            inner = m.group(1).replace('–', '-')
+            parts = [p.strip() for p in re.split(r'\s*,\s*', inner) if p.strip()]
+            if parts and all(re.match(r'^\d{1,3}(?:-\d{1,3})?$', pt) for pt in parts):
+                paren_count += 1
+
+    # Dominant format determination
+    if sup_count >= 3 and sup_count >= bracket_count and (paren_count == 0 or sup_count >= 2 * paren_count):
+        return "sup"
+    if bracket_count >= 3 and bracket_count >= paren_count:
+        return "bracket"
+    if paren_count >= 3 and sup_count == 0 and bracket_count == 0:
+        return "paren"
+    if sup_count >= 2 and paren_count >= 2:
+        return "mixed"
+    if sup_count > 0:
+        return "sup"
+    if bracket_count > 0:
+        return "bracket"
+    if paren_count > 0:
+        return "paren"
+    return "sup"
+
 def parse_docx_manuscript(
     docx_path: str,
     citation_format: str = "auto"
@@ -141,12 +230,36 @@ def parse_paragraphs_list(
     if ref_hdr_idx is not None:
         for idx in range(ref_hdr_idx, len(para_texts)):
             line = para_texts[idx].strip()
+            if not line:
+                continue
+            # Stop if a post-reference section begins (e.g. Supplementary, Figures, Tables)
+            if idx > ref_hdr_idx and POST_REF_HEADER.match(line) and len(references) > 0:
+                break
             m = REF_START.match(line)
             if m:
                 r_num = int(m.group(1))
-                references.append(parse_reference_line(r_num, m.group(2)))
+                content = m.group(2)
+                # Verify it is not a section heading like '1. Introduction'
+                if is_likely_reference_line(content) or (idx + 1 < len(para_texts) and (REF_START.match(para_texts[idx+1].strip()) or DOI_RE.search(para_texts[idx+1]))):
+                    references.append(parse_reference_line(r_num, content))
+            elif references:
+                # Multi-line reference continuation: check if next paragraph is wrapped DOI / PMID / URL
+                if DOI_RE.search(line) or FALLBACK_DOI_RE.search(line) or PMID_RE.search(line):
+                    last_ref = references[-1]
+                    last_ref.raw_text += " " + line
+                    if not last_ref.doi:
+                        last_ref.doi = clean_doi(line)
+                    if not last_ref.pmid:
+                        pm = PMID_RE.search(line)
+                        if pm:
+                            last_ref.pmid = pm.group(1)
 
     n_refs = len(references) if references else 999
+
+    # Determine effective citation format via Pass 1 profiling if auto
+    effective_format = citation_format
+    if citation_format == "auto":
+        effective_format = profile_document_citation_format(para_texts, doc, scan_end=scan_end)
 
     # 3. Find body start
     start_idx = 0
@@ -174,7 +287,7 @@ def parse_paragraphs_list(
             for ri, r in enumerate(p_obj.runs):
                 r_txt = r.text or ""
                 # 1. Superscript check
-                if citation_format in ("auto", "sup") and is_superscript(r) and SUP_CIT.match(r_txt):
+                if effective_format in ("auto", "sup", "mixed") and is_superscript(r) and SUP_CIT.match(r_txt):
                     inner = r_txt.replace('–', '-')
                     nums = []
                     for part in re.split(r'\s*,\s*', inner):
@@ -213,7 +326,7 @@ def parse_paragraphs_list(
                         ))
                 
                 # 2. Bracket check [1, 2]
-                if citation_format in ("auto", "bracket") and BRACKET_CIT.search(r_txt):
+                if effective_format in ("auto", "bracket") and BRACKET_CIT.search(r_txt):
                     for m in BRACKET_CIT.finditer(r_txt):
                         inner = m.group(1).replace('–', '-')
                         nums = []
@@ -240,7 +353,7 @@ def parse_paragraphs_list(
                             ))
 
                 # 3. Parenthetical check (1, 2)
-                if citation_format in ("auto", "paren") and PAREN_CIT.search(r_txt):
+                if effective_format in ("auto", "paren", "mixed") and PAREN_CIT.search(r_txt):
                     for m in PAREN_CIT.finditer(r_txt):
                         # Guard against classification nouns e.g. "stage (1)", "Table (2)"
                         context_prior = (combined_prev + r_txt[:m.start()]).rstrip()
@@ -291,7 +404,7 @@ def parse_paragraphs_list(
         else:
             # Plain text parsing
             # 1. Bracket check
-            if citation_format in ("auto", "bracket"):
+            if effective_format in ("auto", "bracket"):
                 for m in BRACKET_CIT.finditer(p_text):
                     inner = m.group(1).replace('–', '-')
                     nums = []
@@ -328,7 +441,7 @@ def parse_paragraphs_list(
                         ))
 
             # 2. Parenthetical check
-            if citation_format in ("auto", "paren"):
+            if effective_format in ("auto", "paren", "mixed"):
                 for m in PAREN_CIT.finditer(p_text):
                     context_prior = p_text[:m.start()].rstrip()
                     if CLASSIFICATION_NOUNS.search(context_prior):

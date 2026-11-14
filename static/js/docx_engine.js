@@ -13,12 +13,102 @@ const BRACKET_REGEX = /\[((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3
 const REF_START_REGEX = /^(\d{1,3})\.\s+(.*)$/;
 const REF_HEADER_REGEX = /^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$/i;
 const BODY_START_REGEX = /^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|BACKGROUND|Key Results)\s*$/i;
+const POST_REF_HEADER_REGEX = /^(Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)/i;
+const YEAR_REGEX = /\b(19\d\d|20\d\d)\b/;
 
 const EXPONENT_CHARS = new Set(['R', 'r', 'χ', 'τ', 'I', 'β', 't', 'f', 'z', 'p']);
 const EXPONENT_WORDS = ['cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th'];
 const CLASSIFICATION_NOUNS = /\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$/i;
 const CLINICAL_SCALE_REGEX = /\b(graded\s+(?:on|as|by)?|scores?|scales?|grades?|grading|stages?|staging|classes?|indices?|index|points?|severity|levels?|subscores?|criteria|systems?|angiography|perfusion|tomography|mRS|NIHSS|GCS|mTICI|TICI|TIMI|ASPECTS|DSA)\b/i;
 const ENUMERATED_LIST_START = /^\s*\((?:\d{1,2})\)\s+[A-Z]/;
+
+function isLikelyReferenceLine(line) {
+  const clean = (line || "").trim();
+  if (!clean) return false;
+  if (/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+/i.test(clean) ||
+      /\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/.test(clean) ||
+      /PMID:\s*\d{6,9}/i.test(clean)) {
+    return true;
+  }
+  if (YEAR_REGEX.test(clean)) return true;
+  if (clean.toLowerCase().includes('et al') || clean.includes(';') || clean.includes(':')) return true;
+  const words = clean.split(/\s+/);
+  if (words.length <= 6) return false;
+  return true;
+}
+
+function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
+  let supCount = 0;
+  let bracketCount = 0;
+  let parenCount = 0;
+
+  for (let pi = 0; pi < Math.min(scanEnd, paragraphs.length); pi++) {
+    const pEl = paragraphs[pi];
+    const runs = Array.from(pEl.getElementsByTagNameNS(W_NS, "r"));
+    let combined = "";
+    for (let ri = 0; ri < runs.length; ri++) {
+      const r = runs[ri];
+      const rText = Array.from(r.getElementsByTagNameNS(W_NS, "t")).map(t => t.textContent).join("");
+      const rPr = r.getElementsByTagNameNS(W_NS, "rPr")[0];
+      const va = rPr ? rPr.getElementsByTagNameNS(W_NS, "vertAlign")[0] : null;
+      const isSup = va && va.getAttributeNS(W_NS, "val") === "superscript";
+
+      if (isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
+        const prevChar = combined.slice(-1);
+        const lowerPrev = combined.trim().toLowerCase();
+        const isExpWord = EXPONENT_WORDS.some(w => lowerPrev.endsWith(w));
+        const isExpChar = EXPONENT_CHARS.has(prevChar) && ['2', '3', '4'].includes(rText);
+        if (prevChar && !/\d/.test(prevChar) && !isExpChar && !isExpWord) {
+          supCount++;
+        }
+      }
+      combined += rText;
+    }
+  }
+
+  for (let pi = 0; pi < Math.min(scanEnd, paraTexts.length); pi++) {
+    const pText = paraTexts[pi];
+    if (!pText.trim()) continue;
+
+    // Brackets
+    const bMatches = pText.match(BRACKET_REGEX) || [];
+    bMatches.forEach(b => {
+      const inner = b.slice(1, -1).replace(/–/g, '-');
+      const parts = inner.split(/\s*,\s*/).filter(Boolean);
+      if (parts.length > 0 && parts.every(p => /^\d{1,3}(?:-\d{1,3})?$/.test(p))) {
+        bracketCount++;
+      }
+    });
+
+    // Parens (applying clinical scale guards)
+    const pMatches = pText.match(PAREN_REGEX) || [];
+    pMatches.forEach(pm => {
+      const inner = pm.slice(1, -1).replace(/–/g, '-');
+      const parts = inner.split(/\s*,\s*/).filter(Boolean);
+      if (parts.length > 0 && parts.every(p => /^\d{1,3}(?:-\d{1,3})?$/.test(p))) {
+        parenCount++;
+      }
+    });
+  }
+
+  // Dominant format determination
+  if (supCount >= 3 && supCount >= bracketCount && (parenCount === 0 || supCount >= 2 * parenCount)) {
+    return "sup";
+  }
+  if (bracketCount >= 3 && bracketCount >= parenCount) {
+    return "bracket";
+  }
+  if (parenCount >= 3 && supCount === 0 && bracketCount === 0) {
+    return "paren";
+  }
+  if (supCount >= 2 && parenCount >= 2) {
+    return "mixed";
+  }
+  if (supCount > 0) return "sup";
+  if (bracketCount > 0) return "bracket";
+  if (parenCount > 0) return "paren";
+  return "sup";
+}
 
 export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   if (!window.JSZip) {
@@ -53,31 +143,55 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   const startRef = (refHdrIdx !== -1) ? refHdrIdx : 0;
   for (let i = startRef; i < paraTexts.length; i++) {
     const line = paraTexts[i].trim();
+    if (!line) continue;
+    // Stop if a post-reference section begins (e.g. Supplementary, Figures, Tables)
+    if (refHdrIdx !== -1 && i > refHdrIdx && POST_REF_HEADER_REGEX.test(line) && references.length > 0) {
+      break;
+    }
     const m = line.match(REF_START_REGEX);
     if (m) {
       const refNum = parseInt(m[1], 10);
       const content = m[2];
-      const doiM = content.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
-                   content.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
-      const doi = doiM ? doiM[1].replace(/[.,;)]+$/, '') : "";
+      if (isLikelyReferenceLine(content) || (i + 1 < paraTexts.length && (REF_START_REGEX.test(paraTexts[i+1].trim()) || /(?:https?:\/\/|doi:)/i.test(paraTexts[i+1])))) {
+        const doiM = content.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
+                     content.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
+        const doi = doiM ? doiM[1].replace(/[.,;)]+$/, '') : "";
 
-      const parts = content.split(". ");
-      const authors = parts.length > 0 ? parts[0].split(/,| and /).map(a => a.trim()).filter(Boolean) : [];
-      const title = parts.length > 1 ? parts[1].trim() : "";
+        const parts = content.split(". ");
+        const authors = parts.length > 0 ? parts[0].split(/,| and /).map(a => a.trim()).filter(Boolean) : [];
+        const title = parts.length > 1 ? parts[1].trim() : "";
 
-      references.push({
-        ref_num: refNum,
-        raw_text: line,
-        title: title,
-        authors: authors,
-        journal: "",
-        year: "",
-        volume: "",
-        issue: "",
-        pages: "",
-        doi: doi
-      });
+        references.push({
+          ref_num: refNum,
+          raw_text: line,
+          title: title,
+          authors: authors,
+          journal: "",
+          year: "",
+          volume: "",
+          issue: "",
+          pages: "",
+          doi: doi
+        });
+      }
+    } else if (references.length > 0) {
+      // Check multi-line reference continuation (e.g. wrapped DOI or PMID on subsequent paragraph)
+      const contDoiM = line.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
+                        line.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
+      if (contDoiM) {
+        const lastRef = references[references.length - 1];
+        lastRef.raw_text += " " + line;
+        if (!lastRef.doi) {
+          lastRef.doi = contDoiM[1].replace(/[.,;)]+$/, '');
+        }
+      }
     }
+  }
+
+  // Determine effective format via Pass 1 profiling if auto
+  let effectiveFormat = citationFormat;
+  if (citationFormat === "auto") {
+    effectiveFormat = profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd);
   }
 
   // 3. Find body start
@@ -112,7 +226,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
       const isSup = va && va.getAttributeNS(W_NS, "val") === "superscript";
 
       // 1. Superscript check
-      if ((citationFormat === "auto" || citationFormat === "sup") && isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
+      if ((effectiveFormat === "auto" || effectiveFormat === "sup" || effectiveFormat === "mixed") && isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
         const inner = rText.replace(/–/g, '-');
         const nums = [];
         inner.split(/\s*,\s*/).forEach(part => {
@@ -152,7 +266,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
       }
 
       // 2. Square Bracket match [1, 2]
-      if (citationFormat === "auto" || citationFormat === "bracket") {
+      if (effectiveFormat === "auto" || effectiveFormat === "bracket") {
         let bMatch;
         const bracketRe = new RegExp(BRACKET_REGEX);
         while ((bMatch = bracketRe.exec(rText)) !== null) {
@@ -189,7 +303,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
       }
 
       // 3. Parenthetical match (1, 2)
-      if (citationFormat === "auto" || citationFormat === "paren") {
+      if (effectiveFormat === "auto" || effectiveFormat === "paren" || effectiveFormat === "mixed") {
         let match;
         const parenRe = new RegExp(PAREN_REGEX);
         while ((match = parenRe.exec(rText)) !== null) {
@@ -264,7 +378,8 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
     paragraphs,
     sites,
     references,
-    refHdrIdx
+    refHdrIdx,
+    detectedFormat: effectiveFormat
   };
 }
 

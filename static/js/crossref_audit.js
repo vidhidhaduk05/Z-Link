@@ -6,6 +6,8 @@
 const HANDLE_API = "https://doi.org/api/handles/";
 const CROSSREF_API = "https://api.crossref.org/works/";
 const OPENALEX_API = "https://api.openalex.org/works/https://doi.org/";
+const EUROPE_PMC_API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search";
+const OPENALEX_WORKS_API = "https://api.openalex.org/works";
 
 // Recognized academic publisher domains that enforce WAF / Cloudflare bot challenges or paywalls
 const PROTECTED_PUBLISHER_DOMAINS = [
@@ -153,6 +155,100 @@ async function queryOpenAlex(cleanDoi) {
 }
 
 /**
+ * Compute word overlap similarity between reference title and registry title
+ */
+function computeTitleSimilarity(targetTitle, candidateTitle) {
+  if (!targetTitle || !candidateTitle) return 0;
+  const tWords = new Set(targetTitle.toLowerCase().match(/\b[a-z]{3,}\b/g) || []);
+  const cWords = new Set(candidateTitle.toLowerCase().replace(/<[^>]+>/g, '').match(/\b[a-z]{3,}\b/g) || []);
+  if (tWords.size === 0 || cWords.size === 0) return 0;
+  let common = 0;
+  tWords.forEach(w => { if (cWords.has(w)) common++; });
+  const union = new Set([...tWords, ...cWords]);
+  return common / union.size;
+}
+
+/**
+ * Query EMBL-EBI Europe PMC REST API (Biomedical primary, open CORS, high speed)
+ */
+async function recoverDoiFromEuropePmc(rawText, title) {
+  const cleanTitle = (title || "").replace(/["\r\n]/g, " ").trim();
+  const queryCandidates = [];
+  if (cleanTitle && cleanTitle.length > 15) {
+    queryCandidates.push(`TITLE:"${cleanTitle}"`);
+  }
+  const cleanRaw = (rawText || "").replace(/^\d+\.\s*/, "").trim();
+  if (cleanRaw && cleanRaw.length > 20) {
+    queryCandidates.push(cleanRaw.slice(0, 180));
+  }
+
+  for (const q of queryCandidates) {
+    const url = `${EUROPE_PMC_API}?query=${encodeURIComponent(q)}&resultType=lite&pageSize=1&format=json`;
+    try {
+      const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (resp.status === 200) {
+        const data = await resp.json();
+        const results = (data.resultList && data.resultList.result) ? data.resultList.result : [];
+        if (results.length > 0) {
+          const top = results[0];
+          if (top.doi) {
+            if (title && title.length > 15) {
+              const sim = computeTitleSimilarity(title, top.title || "");
+              if (sim < 0.50) continue;
+            }
+            return {
+              found: true,
+              doi: top.doi,
+              title: top.title || "",
+              source: "Europe PMC"
+            };
+          }
+        }
+      }
+    } catch (e) {
+      // Continue to next candidate
+    }
+  }
+  return { found: false };
+}
+
+/**
+ * Query OpenAlex Scholarly Graph (Universal multidisciplinary fallback)
+ */
+async function recoverDoiFromOpenAlex(rawText, title) {
+  const queryStr = (title && title.length > 15) ? title : (rawText || "").replace(/^\d+\.\s*/, "").trim();
+  if (!queryStr || queryStr.length < 15) return { found: false };
+
+  const url = `${OPENALEX_WORKS_API}?search=${encodeURIComponent(queryStr.slice(0, 200))}&per-page=1`;
+  try {
+    const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (resp.status === 200) {
+      const data = await resp.json();
+      const results = data.results || [];
+      if (results.length > 0) {
+        const top = results[0];
+        if (top.doi) {
+          const cleanDoi = top.doi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
+          if (title && title.length > 15) {
+            const sim = computeTitleSimilarity(title, top.title || "");
+            if (sim < 0.50) return { found: false };
+          }
+          return {
+            found: true,
+            doi: cleanDoi,
+            title: top.title || "",
+            source: "OpenAlex"
+          };
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore
+  }
+  return { found: false };
+}
+
+/**
  * Query Crossref Bibliographic API to automatically recover a missing DOI
  */
 async function recoverDoiFromBibliographic(rawText, title) {
@@ -170,17 +266,14 @@ async function recoverDoiFromBibliographic(rawText, title) {
         if (top.DOI && top.score >= 40) {
           const topTitle = (top.title && top.title.length > 0) ? top.title[0] : "";
           if (title && title.length > 15) {
-            const tWords = new Set(title.toLowerCase().match(/\b[a-z]{3,}\b/g) || []);
-            const cWords = new Set(topTitle.toLowerCase().replace(/<[^>]+>/g, '').match(/\b[a-z]{3,}\b/g) || []);
-            let common = 0;
-            tWords.forEach(w => { if (cWords.has(w)) common++; });
-            const sim = common / Math.max(1, Math.min(tWords.size, cWords.size));
-            if (sim < 0.45) return { found: false };
+            const sim = computeTitleSimilarity(title, topTitle);
+            if (sim < 0.50) return { found: false };
           }
           return {
             found: true,
             doi: top.DOI,
             title: topTitle,
+            source: "Crossref",
             item: top
           };
         }
@@ -193,18 +286,39 @@ async function recoverDoiFromBibliographic(rawText, title) {
 }
 
 /**
+ * Cascade through multi-registry search for missing DOI
+ */
+async function recoverMissingDoi(rawText, title) {
+  // 1. Europe PMC (Fastest biomedical index, open CORS, no rate limit)
+  const ep = await recoverDoiFromEuropePmc(rawText, title);
+  if (ep.found && ep.doi) return ep;
+
+  // 2. OpenAlex (Global multidisciplinary scholarly graph)
+  const oa = await recoverDoiFromOpenAlex(rawText, title);
+  if (oa.found && oa.doi) return oa;
+
+  // 3. Crossref Bibliographic API
+  const cr = await recoverDoiFromBibliographic(rawText, title);
+  if (cr.found && cr.doi) return cr;
+
+  return { found: false };
+}
+
+/**
  * Master Reference Validation Function
  */
 export async function validateReferenceCrossref(doi, rawText = "", title = "") {
   let cleanDoi = doi ? doi.trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '') : "";
   let isRecovered = false;
+  let recoverySource = "";
 
-  // Auto-recover missing DOI
+  // Auto-recover missing DOI via multi-registry cascade
   if (!cleanDoi && (rawText || title)) {
-    const rec = await recoverDoiFromBibliographic(rawText, title);
+    const rec = await recoverMissingDoi(rawText, title);
     if (rec.found && rec.doi) {
       cleanDoi = rec.doi;
       isRecovered = true;
+      recoverySource = rec.source || "Registry";
     }
   }
 
@@ -247,6 +361,7 @@ export async function validateReferenceCrossref(doi, rawText = "", title = "") {
         is_bot_gated: true,
         is_recovered: isRecovered,
         recovered_doi: isRecovered ? cleanDoi : "",
+        recovery_source: recoverySource,
         http_status: 403,
         resolved_url: effectiveUrl,
         crossref_found: isMetadataFound,
@@ -259,7 +374,7 @@ export async function validateReferenceCrossref(doi, rawText = "", title = "") {
         crossref_pages: meta.pages || "",
         abstract: meta.abstract || "",
         notes: [
-          isRecovered ? `Auto-resolved missing DOI via Crossref: ${cleanDoi}` : "Registered active DOI.",
+          isRecovered ? `Auto-resolved missing DOI via ${recoverySource}: ${cleanDoi}` : "Registered active DOI.",
           "Publisher (e.g. Elsevier / Springer Nature / OUP / RSNA) protects landing page with anti-bot verification (Cloudflare/WAF) or institutional paywall.",
           "The link is valid and fully accessible for human readers in standard web browsers."
         ]
@@ -271,6 +386,7 @@ export async function validateReferenceCrossref(doi, rawText = "", title = "") {
         is_bot_gated: false,
         is_recovered: isRecovered,
         recovered_doi: isRecovered ? cleanDoi : "",
+        recovery_source: recoverySource,
         http_status: 200,
         resolved_url: effectiveUrl,
         crossref_found: isMetadataFound,
@@ -282,7 +398,7 @@ export async function validateReferenceCrossref(doi, rawText = "", title = "") {
         crossref_issue: meta.issue || "",
         crossref_pages: meta.pages || "",
         abstract: meta.abstract || "",
-        notes: [isRecovered ? `Auto-resolved missing DOI via Crossref: ${cleanDoi}` : "Validated and registered in scholarly database."]
+        notes: [isRecovered ? `Auto-resolved missing DOI via ${recoverySource}: ${cleanDoi}` : "Validated and registered in scholarly database."]
       };
     }
   }

@@ -351,6 +351,87 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertFalse(verdict_unidx.is_recovered_doi, "Should not hallucinate DOI for local guidelines")
         self.assertEqual(verdict_unidx.status, "missing_doi")
 
+    def test_17_format_profiler_and_parenthetical_immunity(self):
+        from server.parser import parse_docx_manuscript
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript not present")
+
+        # In Auto mode, ACTA2 manuscript should profile as 'sup'
+        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        
+        # Verify 100% of detected sites are superscripts
+        self.assertTrue(all(s.kind == "sup" for s in sites), "All detected sites in ACTA2 must be superscripts")
+        
+        # Verify no parenthetical clinical scales or measurements were matched
+        detected_texts = [s.text for s in sites]
+        self.assertNotIn("(0-8)", detected_texts)
+        self.assertNotIn("(2b-3)", detected_texts)
+        self.assertNotIn("(1.8)", detected_texts)
+        self.assertNotIn("(<30%)", detected_texts)
+
+    def test_18_multiline_reference_stitching(self):
+        from server.parser import parse_paragraphs_list
+
+        doc_with_wrapped_doi = [
+            "INTRODUCTION",
+            "This study investigates cavernous malformations [1].",
+            "REFERENCES",
+            "1. Al-Shahi Salman R, Hall JM, Horne MA, et al. Untreated clinical course of cerebral cavernous malformations: a prospective, population-based cohort study. Lancet Neurol. 2012;11(3):217-224.",
+            "doi: 10.1016/S1474-4422(12)70004-2",
+            "2. Second Author. Second Title. Journal. 2021;10:1-5.",
+            "https://doi.org/10.1038/s41586-020-2649-2"
+        ]
+
+        paras, sites, refs = parse_paragraphs_list(doc_with_wrapped_doi, citation_format="bracket")
+        self.assertEqual(len(refs), 2, "Should have 2 references")
+        
+        # Verify both wrapped DOIs were stitched into their respective references
+        self.assertEqual(refs[0].ref_num, 1)
+        self.assertEqual(refs[0].doi, "10.1016/S1474-4422(12)70004-2")
+        self.assertIn("doi: 10.1016/S1474-4422(12)70004-2", refs[0].raw_text)
+
+        self.assertEqual(refs[1].ref_num, 2)
+        self.assertEqual(refs[1].doi, "10.1038/s41586-020-2649-2")
+
+    def test_19_section_heading_and_figure_legend_rejection(self):
+        from server.parser import parse_paragraphs_list
+
+        doc_with_headings_and_appendix = [
+            "1. Introduction",
+            "Cerebral cavernous malformations are common vascular lesions [1].",
+            "2. Methods",
+            "Patients were imaged with 3T MRI.",
+            "REFERENCES",
+            "1. Al-Shahi Salman R, et al. Untreated clinical course. Lancet Neurol. 2012. doi: 10.1016/S1474-4422(12)70004-2",
+            "Supplementary Material",
+            "1. Supplementary Table 1. Patient cohort demographics.",
+            "2. Supplementary Figure 1. Flowchart of study inclusion."
+        ]
+
+        paras, sites, refs = parse_paragraphs_list(doc_with_headings_and_appendix, citation_format="bracket")
+        
+        # Verify that '1. Introduction' and '2. Methods' are NOT parsed as references
+        # And '1. Supplementary Table 1' after 'Supplementary Material' is NOT parsed as reference
+        self.assertEqual(len(refs), 1, "Only the genuine reference should be parsed")
+        self.assertEqual(refs[0].ref_num, 1)
+        self.assertIn("Al-Shahi Salman", refs[0].raw_text)
+
+    def test_20_multi_registry_doi_recovery_europepmc_openalex(self):
+        from server.validator import search_europepmc_bibliographic, search_openalex_bibliographic
+        
+        # 1. Test Europe PMC discovery
+        title_ep = "Untreated clinical course of cerebral cavernous malformations: a prospective, population-based cohort study"
+        doi_ep, meta_ep = search_europepmc_bibliographic("", title_ep)
+        self.assertTrue(bool(doi_ep), "Europe PMC should find Lancet Neurol paper DOI")
+        self.assertEqual(doi_ep.lower(), "10.1016/s1474-4422(12)70004-2")
+
+        # 2. Test OpenAlex discovery
+        title_oa = "Brain arteriovenous malformations"
+        doi_oa, meta_oa = search_openalex_bibliographic("", title_oa)
+        self.assertTrue(bool(doi_oa), "OpenAlex should find Brain arteriovenous malformations paper")
+        self.assertIn("10.1038/nrdp.2015.8", doi_oa.lower())
+
 if __name__ == "__main__":
     unittest.main()
 
