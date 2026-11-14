@@ -18,6 +18,10 @@ BODY_START = re.compile(r'^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|Introduction
 EXPONENT_PREV_CHARS = set('RrχτIβtfzp')
 EXPONENT_PREV_WORDS = ('cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th')
 CLASSIFICATION_NOUNS = re.compile(r'\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model|item|point|rule|part)\s*$', re.I)
+CLINICAL_SCALE_RE = re.compile(
+    r'\b(graded\s+(?:on|as|by)?|scores?|scales?|grades?|grading|stages?|staging|classes?|indices?|index|points?|severity|levels?|subscores?|criteria|systems?|angiography|perfusion|tomography|mRS|NIHSS|GCS|mTICI|TICI|TIMI|ASPECTS|DSA)\b',
+    re.I
+)
 ENUMERATED_LIST_START = re.compile(r'^\s*\((?:\d{1,2})\)\s+[A-Za-z]')
 DOI_RE = re.compile(r'(?:https?://(?:dx\.)?doi\.org/|doi:\s*)(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)', re.I)
 FALLBACK_DOI_RE = re.compile(r'\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b')
@@ -242,6 +246,8 @@ def parse_paragraphs_list(
                         context_prior = (combined_prev + r_txt[:m.start()]).rstrip()
                         if CLASSIFICATION_NOUNS.search(context_prior):
                             continue
+                        if CLINICAL_SCALE_RE.search(context_prior[-60:]):
+                            continue
                         # Guard against enumerated lists e.g. "(1) We analyzed..."
                         sentence_start_check = r_txt[m.start():m.end() + 20]
                         if ENUMERATED_LIST_START.match(sentence_start_check) and not context_prior:
@@ -249,13 +255,24 @@ def parse_paragraphs_list(
 
                         inner = m.group(1).replace('–', '-')
                         nums = []
+                        has_zero = False
                         for part in re.split(r'\s*,\s*', inner):
                             if '-' in part:
                                 sp = part.split('-')
                                 if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
-                                    nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                                    s0, s1 = int(sp[0]), int(sp[1])
+                                    if s0 <= 0 or s1 <= 0:
+                                        has_zero = True
+                                        break
+                                    nums.extend(range(s0, s1 + 1))
                             elif part.strip().isdigit():
-                                nums.append(int(part))
+                                val = int(part)
+                                if val <= 0:
+                                    has_zero = True
+                                    break
+                                nums.append(val)
+                        if has_zero or not nums:
+                            continue
                         if nums and (n_refs == 999 or max(nums) <= n_refs):
                             global_start = len(combined_prev) + m.start()
                             sent = extract_surrounding_sentence(p_text, global_start, global_start + len(m.group(0)))
@@ -278,13 +295,24 @@ def parse_paragraphs_list(
                 for m in BRACKET_CIT.finditer(p_text):
                     inner = m.group(1).replace('–', '-')
                     nums = []
+                    has_zero = False
                     for part in re.split(r'\s*,\s*', inner):
                         if '-' in part:
                             sp = part.split('-')
                             if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
-                                nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                                s0, s1 = int(sp[0]), int(sp[1])
+                                if s0 <= 0 or s1 <= 0:
+                                    has_zero = True
+                                    break
+                                nums.extend(range(s0, s1 + 1))
                         elif part.strip().isdigit():
-                            nums.append(int(part))
+                            val = int(part)
+                            if val <= 0:
+                                has_zero = True
+                                break
+                            nums.append(val)
+                    if has_zero or not nums:
+                        continue
                     if nums and (n_refs == 999 or max(nums) <= n_refs):
                         sent = extract_surrounding_sentence(p_text, m.start(), m.end())
                         sites.append(CitationSite(
@@ -305,19 +333,32 @@ def parse_paragraphs_list(
                     context_prior = p_text[:m.start()].rstrip()
                     if CLASSIFICATION_NOUNS.search(context_prior):
                         continue
+                    if CLINICAL_SCALE_RE.search(context_prior[-60:]):
+                        continue
                     trailing = p_text[m.start():m.end() + 20]
                     if ENUMERATED_LIST_START.match(trailing) and not context_prior:
                         continue
 
                     inner = m.group(1).replace('–', '-')
                     nums = []
+                    has_zero = False
                     for part in re.split(r'\s*,\s*', inner):
                         if '-' in part:
                             sp = part.split('-')
                             if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
-                                nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                                s0, s1 = int(sp[0]), int(sp[1])
+                                if s0 <= 0 or s1 <= 0:
+                                    has_zero = True
+                                    break
+                                nums.extend(range(s0, s1 + 1))
                         elif part.strip().isdigit():
-                            nums.append(int(part))
+                            val = int(part)
+                            if val <= 0:
+                                has_zero = True
+                                break
+                            nums.append(val)
+                    if has_zero or not nums:
+                        continue
                     if nums and (n_refs == 999 or max(nums) <= n_refs):
                         sent = extract_surrounding_sentence(p_text, m.start(), m.end())
                         sites.append(CitationSite(

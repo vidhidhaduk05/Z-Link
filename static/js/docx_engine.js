@@ -17,6 +17,7 @@ const BODY_START_REGEX = /^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|BACKGROUND|K
 const EXPONENT_CHARS = new Set(['R', 'r', 'χ', 'τ', 'I', 'β', 't', 'f', 'z', 'p']);
 const EXPONENT_WORDS = ['cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th'];
 const CLASSIFICATION_NOUNS = /\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$/i;
+const CLINICAL_SCALE_REGEX = /\b(graded\s+(?:on|as|by)?|scores?|scales?|grades?|grading|stages?|staging|classes?|indices?|index|points?|severity|levels?|subscores?|criteria|systems?|angiography|perfusion|tomography|mRS|NIHSS|GCS|mTICI|TICI|TIMI|ASPECTS|DSA)\b/i;
 const ENUMERATED_LIST_START = /^\s*\((?:\d{1,2})\)\s+[A-Z]/;
 
 export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
@@ -192,9 +193,12 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
         let match;
         const parenRe = new RegExp(PAREN_REGEX);
         while ((match = parenRe.exec(rText)) !== null) {
-          // Check classification nouns
+          // Check classification nouns and clinical scale lookbehind
           const contextPrior = (combinedPrev + rText.slice(0, match.index)).trim();
           if (CLASSIFICATION_NOUNS.test(contextPrior)) {
+            continue;
+          }
+          if (CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
             continue;
           }
           // Check enumerated list start
@@ -205,19 +209,34 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
 
           const inner = match[1].replace(/–/g, '-');
           const nums = [];
+          let hasZero = false;
           inner.split(/\s*,\s*/).forEach(part => {
             if (part.includes('-')) {
               const sp = part.split('-');
               const s0 = parseInt(sp[0], 10);
               const s1 = parseInt(sp[1], 10);
               if (!isNaN(s0) && !isNaN(s1)) {
+                if (s0 <= 0 || s1 <= 0) {
+                  hasZero = true;
+                  return;
+                }
                 for (let k = s0; k <= s1; k++) nums.push(k);
               }
             } else {
               const n = parseInt(part, 10);
-              if (!isNaN(n)) nums.push(n);
+              if (!isNaN(n)) {
+                if (n <= 0) {
+                  hasZero = true;
+                  return;
+                }
+                nums.push(n);
+              }
             }
           });
+
+          if (hasZero || nums.length === 0) {
+            continue;
+          }
 
           if (nums.length > 0 && Math.max(...nums) <= maxRefNum) {
             sites.push({

@@ -184,6 +184,45 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(verdict_fake.status, "unreachable", "Nonexistent DOI must be classified as unreachable")
         self.assertFalse(verdict_fake.is_reachable)
 
+    def test_10_clinical_scale_and_score_rejection(self):
+        from server.parser import parse_paragraphs_list
+
+        user_clinical_doc = [
+            "INTRODUCTION",
+            "(modified Thrombolysis in Cerebral Infarction 2b-3), a core (relative cerebral blood flow <30%) less than 25 mL, mismatch ratio at least 1.8, and mismatch volume at least 15 mL. Admission NWU was measured on noncontrast CT with CT perfusion as the spatial reference; venous outflow was graded on CT angiography (0-8).",
+            "Functional outcome was evaluated with the modified Rankin Scale (0-6) and ASPECTS score (0-10). Neurological deficit on arrival was measured using GCS (3-15).",
+            "Prior surgical reports confirmed significant clinical benefit (1, 2). Subsequent multicenter trials confirmed these findings (3-5).",
+            "REFERENCES",
+            "1. First Author. Article 1. 2020. doi: 10.1038/s41586-020-2649-2",
+            "2. Second Author. Article 2. 2021. doi: 10.1056/NEJMoa2002032",
+            "3. Third Author. Article 3. 2022. doi: 10.1038/nature12373",
+            "4. Fourth Author. Article 4. 2023. doi: 10.1038/nature12374",
+            "5. Fifth Author. Article 5. 2024. doi: 10.1038/nature12375",
+            "6. Sixth Author. Article 6. 2024. doi: 10.1038/nature12376",
+            "7. Seventh Author. Article 7. 2024. doi: 10.1038/nature12377",
+            "8. Eighth Author. Article 8. 2024. doi: 10.1038/nature12378",
+            "9. Ninth Author. Article 9. 2024. doi: 10.1038/nature12379",
+            "10. Tenth Author. Article 10. 2024. doi: 10.1038/nature12380"
+        ]
+
+        # Test both auto and paren modes
+        for mode in ["auto", "paren"]:
+            paras, sites, refs = parse_paragraphs_list(user_clinical_doc, citation_format=mode)
+            detected_texts = [s.text for s in sites]
+            
+            # Assert all clinical scales are REJECTED
+            self.assertNotIn("(0-8)", detected_texts, f"Mode {mode}: (0-8) must NOT be detected as citation")
+            self.assertNotIn("(0-6)", detected_texts, f"Mode {mode}: (0-6) must NOT be detected as citation")
+            self.assertNotIn("(0-10)", detected_texts, f"Mode {mode}: (0-10) must NOT be detected as citation")
+            self.assertNotIn("(3-15)", detected_texts, f"Mode {mode}: GCS (3-15) must NOT be detected as citation")
+            
+            # Assert genuine citations are correctly DETECTED
+            self.assertIn("(1, 2)", detected_texts, f"Mode {mode}: (1, 2) MUST be detected as valid citation")
+            self.assertIn("(3-5)", detected_texts, f"Mode {mode}: (3-5) MUST be detected as valid citation")
+            
+            # Verify total sites
+            self.assertEqual(len(sites), 2, f"Mode {mode}: Exactly 2 citations should be found")
+
 if __name__ == "__main__":
     unittest.main()
 
