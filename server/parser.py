@@ -8,6 +8,8 @@ from docx.oxml.ns import qn
 from server.models import CitationSite, ReferenceEntry
 
 PAREN_CIT = re.compile(r'\(((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)\)')
+BRACKET_CIT = re.compile(r'\[((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)]')
+PUNCT_CIT = re.compile(r'(?<=[.,;:])((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)')
 SUP_CIT = re.compile(r'^\d{1,3}(?:[,-]\d{1,3})*$')
 REF_START = re.compile(r'^(\d{1,3})\.\s+(.*)$')
 REF_HEADER = re.compile(r'^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$', re.I)
@@ -15,8 +17,8 @@ BODY_START = re.compile(r'^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|Introduction
 
 EXPONENT_PREV_CHARS = set('RrχτIβtfzp')
 EXPONENT_PREV_WORDS = ('cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th')
-CLASSIFICATION_NOUNS = re.compile(r'\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$', re.I)
-ENUMERATED_LIST_START = re.compile(r'^\s*\((?:\d{1,2})\)\s+[A-Z]')
+CLASSIFICATION_NOUNS = re.compile(r'\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model|item|point|rule|part)\s*$', re.I)
+ENUMERATED_LIST_START = re.compile(r'^\s*\((?:\d{1,2})\)\s+[A-Za-z]')
 DOI_RE = re.compile(r'(?:https?://(?:dx\.)?doi\.org/|doi:\s*)(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)', re.I)
 FALLBACK_DOI_RE = re.compile(r'\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b')
 PMID_RE = re.compile(r'(?:PMID:\s*|pmid:\s*)(\d{6,9})', re.I)
@@ -101,14 +103,18 @@ def extract_surrounding_sentence(para_text: str, match_start: int, match_end: in
         cur_pos = s_end + 1
     return para_text[:120].strip()
 
-def parse_docx_manuscript(docx_path: str) -> Tuple[List[str], List[CitationSite], List[ReferenceEntry]]:
+def parse_docx_manuscript(
+    docx_path: str,
+    citation_format: str = "auto"
+) -> Tuple[List[str], List[CitationSite], List[ReferenceEntry]]:
     doc = docx.Document(docx_path)
     paras = doc.paragraphs
-    return parse_paragraphs_list([p.text for p in paras], doc)
+    return parse_paragraphs_list([p.text for p in paras], doc, citation_format=citation_format)
 
 def parse_paragraphs_list(
     para_texts: List[str],
-    doc: Optional[docx.Document] = None
+    doc: Optional[docx.Document] = None,
+    citation_format: str = "auto"
 ) -> Tuple[List[str], List[CitationSite], List[ReferenceEntry]]:
     # 1. Find reference section
     ref_hdr_idx = None
@@ -163,7 +169,8 @@ def parse_paragraphs_list(
             combined_prev = ""
             for ri, r in enumerate(p_obj.runs):
                 r_txt = r.text or ""
-                if is_superscript(r) and SUP_CIT.match(r_txt):
+                # 1. Superscript check
+                if citation_format in ("auto", "sup") and is_superscript(r) and SUP_CIT.match(r_txt):
                     nums = [int(x) for x in re.split(r'[,-]', r_txt) if x.isdigit()]
                     prev_char = combined_prev[-1:] if combined_prev else ""
                     # exclude affiliation markers like "MD1" or trailing digits
@@ -178,7 +185,6 @@ def parse_paragraphs_list(
                         combined_prev += r_txt
                         continue
                     if nums and (n_refs == 999 or max(nums) <= n_refs):
-                        # Calculate position roughly
                         m_start = len(combined_prev)
                         sent = extract_surrounding_sentence(p_text, m_start, m_start + len(r_txt))
                         sites.append(CitationSite(
@@ -192,7 +198,36 @@ def parse_paragraphs_list(
                             match_start=m_start,
                             match_end=m_start + len(r_txt)
                         ))
-                elif PAREN_CIT.search(r_txt):
+                
+                # 2. Bracket check [1, 2]
+                if citation_format in ("auto", "bracket") and BRACKET_CIT.search(r_txt):
+                    for m in BRACKET_CIT.finditer(r_txt):
+                        inner = m.group(1).replace('–', '-')
+                        nums = []
+                        for part in re.split(r'\s*,\s*', inner):
+                            if '-' in part:
+                                sp = part.split('-')
+                                if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
+                                    nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                            elif part.strip().isdigit():
+                                nums.append(int(part))
+                        if nums and (n_refs == 999 or max(nums) <= n_refs):
+                            global_start = len(combined_prev) + m.start()
+                            sent = extract_surrounding_sentence(p_text, global_start, global_start + len(m.group(0)))
+                            sites.append(CitationSite(
+                                paragraph_idx=pi,
+                                run_idx=ri,
+                                kind="bracket",
+                                text=m.group(0),
+                                context_before=p_text[max(0, global_start - 40):global_start],
+                                sentence=sent,
+                                nums=sorted(set(nums)),
+                                match_start=global_start,
+                                match_end=global_start + len(m.group(0))
+                            ))
+
+                # 3. Parenthetical check (1, 2)
+                if citation_format in ("auto", "paren") and PAREN_CIT.search(r_txt):
                     for m in PAREN_CIT.finditer(r_txt):
                         # Guard against classification nouns e.g. "stage (1)", "Table (2)"
                         context_prior = (combined_prev + r_txt[:m.start()]).rstrip()
@@ -228,39 +263,65 @@ def parse_paragraphs_list(
                             ))
                 combined_prev += r_txt
         else:
-            # Plain text parsing for parentheticals
-            for m in PAREN_CIT.finditer(p_text):
-                # Guard against classification nouns e.g. "stage (1)", "Table (2)"
-                context_prior = p_text[:m.start()].rstrip()
-                if CLASSIFICATION_NOUNS.search(context_prior):
-                    continue
-                # Guard against enumerated lists e.g. "(1) We analyzed..."
-                trailing = p_text[m.start():m.end() + 20]
-                if ENUMERATED_LIST_START.match(trailing) and not context_prior:
-                    continue
+            # Plain text parsing
+            # 1. Bracket check
+            if citation_format in ("auto", "bracket"):
+                for m in BRACKET_CIT.finditer(p_text):
+                    inner = m.group(1).replace('–', '-')
+                    nums = []
+                    for part in re.split(r'\s*,\s*', inner):
+                        if '-' in part:
+                            sp = part.split('-')
+                            if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
+                                nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                        elif part.strip().isdigit():
+                            nums.append(int(part))
+                    if nums and (n_refs == 999 or max(nums) <= n_refs):
+                        sent = extract_surrounding_sentence(p_text, m.start(), m.end())
+                        sites.append(CitationSite(
+                            paragraph_idx=pi,
+                            run_idx=0,
+                            kind="bracket",
+                            text=m.group(0),
+                            context_before=p_text[max(0, m.start() - 40):m.start()],
+                            sentence=sent,
+                            nums=sorted(set(nums)),
+                            match_start=m.start(),
+                            match_end=m.end()
+                        ))
 
-                inner = m.group(1).replace('–', '-')
-                nums = []
-                for part in re.split(r'\s*,\s*', inner):
-                    if '-' in part:
-                        sp = part.split('-')
-                        if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
-                            nums.extend(range(int(sp[0]), int(sp[1]) + 1))
-                    elif part.strip().isdigit():
-                        nums.append(int(part))
-                if nums and (n_refs == 999 or max(nums) <= n_refs):
-                    sent = extract_surrounding_sentence(p_text, m.start(), m.end())
-                    sites.append(CitationSite(
-                        paragraph_idx=pi,
-                        run_idx=0,
-                        kind="paren",
-                        text=m.group(0),
-                        context_before=p_text[max(0, m.start() - 40):m.start()],
-                        sentence=sent,
-                        nums=sorted(set(nums)),
-                        match_start=m.start(),
-                        match_end=m.end()
-                    ))
+            # 2. Parenthetical check
+            if citation_format in ("auto", "paren"):
+                for m in PAREN_CIT.finditer(p_text):
+                    context_prior = p_text[:m.start()].rstrip()
+                    if CLASSIFICATION_NOUNS.search(context_prior):
+                        continue
+                    trailing = p_text[m.start():m.end() + 20]
+                    if ENUMERATED_LIST_START.match(trailing) and not context_prior:
+                        continue
+
+                    inner = m.group(1).replace('–', '-')
+                    nums = []
+                    for part in re.split(r'\s*,\s*', inner):
+                        if '-' in part:
+                            sp = part.split('-')
+                            if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
+                                nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                        elif part.strip().isdigit():
+                            nums.append(int(part))
+                    if nums and (n_refs == 999 or max(nums) <= n_refs):
+                        sent = extract_surrounding_sentence(p_text, m.start(), m.end())
+                        sites.append(CitationSite(
+                            paragraph_idx=pi,
+                            run_idx=0,
+                            kind="paren",
+                            text=m.group(0),
+                            context_before=p_text[max(0, m.start() - 40):m.start()],
+                            sentence=sent,
+                            nums=sorted(set(nums)),
+                            match_start=m.start(),
+                            match_end=m.end()
+                        ))
 
     return para_texts, sites, references
 

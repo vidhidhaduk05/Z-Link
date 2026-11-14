@@ -94,6 +94,32 @@ class TestZoteroLinkEngine(unittest.TestCase):
         # Verify that "stage (1)", "45 patients", "15 cm3", "p < 0.05", "R2" were NEVER matched as citations
         self.assertEqual(len(sites), 2, "Should only find the 2 actual bibliographic citation sites")
 
+    def test_07_bracket_and_format_selection(self):
+        from server.parser import parse_paragraphs_list
+        bracket_paras = [
+            "INTRODUCTION",
+            "Vancouver style uses square brackets [1, 2] and range brackets [3-5].",
+            "This document uses only square brackets for references.",
+            "REFERENCES",
+            "1. First Author. Article 1. 2020. doi: 10.1038/s41586-020-2649-2",
+            "2. Second Author. Article 2. 2021. doi: 10.1056/NEJMoa2002032",
+            "3. Third Author. Article 3. 2022. doi: 10.1038/nature12373",
+            "4. Fourth Author. Article 4. 2023. doi: 10.1038/nature12374",
+            "5. Fifth Author. Article 5. 2024. doi: 10.1038/nature12375"
+        ]
+        
+        # Test bracket-specific mode
+        paras, sites_bracket, refs = parse_paragraphs_list(bracket_paras, citation_format="bracket")
+        nums = []
+        for s in sites_bracket:
+            nums.extend(s.nums)
+        self.assertEqual(nums, [1, 2, 3, 4, 5])
+        self.assertTrue(all(s.kind == "bracket" for s in sites_bracket))
+
+        # Test paren-specific mode (should ignore square brackets [1, 2] and [3-5])
+        paras, sites_paren, refs = parse_paragraphs_list(bracket_paras, citation_format="paren")
+        self.assertEqual(len(sites_paren), 0, "Paren mode should not match square bracket citations")
+
 if __name__ == "__main__":
     unittest.main()
 

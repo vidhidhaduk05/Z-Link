@@ -9,6 +9,7 @@ const DEFAULT_STYLE_NAME = "American Medical Association 11th edition";
 const CSL_SCHEMA = "https://github.com/citation-style-language/schema/raw/master/csl-citation.json";
 
 const PAREN_REGEX = /\(((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)\)/g;
+const BRACKET_REGEX = /\[((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)]/g;
 const REF_START_REGEX = /^(\d{1,3})\.\s+(.*)$/;
 const REF_HEADER_REGEX = /^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$/i;
 const BODY_START_REGEX = /^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|BACKGROUND|Key Results)\s*$/i;
@@ -18,7 +19,7 @@ const EXPONENT_WORDS = ['cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g
 const CLASSIFICATION_NOUNS = /\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$/i;
 const ENUMERATED_LIST_START = /^\s*\((?:\d{1,2})\)\s+[A-Z]/;
 
-export async function parseDocxFile(fileOrBuffer) {
+export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   if (!window.JSZip) {
     throw new Error("JSZip library not loaded.");
   }
@@ -109,7 +110,8 @@ export async function parseDocxFile(fileOrBuffer) {
       const va = rPr ? rPr.getElementsByTagNameNS(W_NS, "vertAlign")[0] : null;
       const isSup = va && va.getAttributeNS(W_NS, "val") === "superscript";
 
-      if (isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
+      // 1. Superscript check
+      if ((citationFormat === "auto" || citationFormat === "sup") && isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
         const nums = rText.split(/[,-]/).map(x => parseInt(x, 10)).filter(x => !isNaN(x));
         const prevChar = combinedPrev.slice(-1);
         const lowerPrev = combinedPrev.trim().toLowerCase();
@@ -131,8 +133,47 @@ export async function parseDocxFile(fileOrBuffer) {
             });
           }
         }
-      } else {
-        // Parenthetical match
+      }
+
+      // 2. Square Bracket match [1, 2]
+      if (citationFormat === "auto" || citationFormat === "bracket") {
+        let bMatch;
+        const bracketRe = new RegExp(BRACKET_REGEX);
+        while ((bMatch = bracketRe.exec(rText)) !== null) {
+          const inner = bMatch[1].replace(/–/g, '-');
+          const nums = [];
+          inner.split(/\s*,\s*/).forEach(part => {
+            if (part.includes('-')) {
+              const sp = part.split('-');
+              const s0 = parseInt(sp[0], 10);
+              const s1 = parseInt(sp[1], 10);
+              if (!isNaN(s0) && !isNaN(s1)) {
+                for (let k = s0; k <= s1; k++) nums.push(k);
+              }
+            } else {
+              const n = parseInt(part, 10);
+              if (!isNaN(n)) nums.push(n);
+            }
+          });
+
+          if (nums.length > 0 && Math.max(...nums) <= maxRefNum) {
+            sites.push({
+              paragraph_idx: pi,
+              run_idx: ri,
+              kind: "bracket",
+              text: bMatch[0],
+              context_before: pText.slice(Math.max(0, bMatch.index - 40), bMatch.index),
+              sentence: pText.slice(0, 140),
+              nums: Array.from(new Set(nums)).sort((a,b) => a - b),
+              match_start: bMatch.index,
+              match_end: bMatch.index + bMatch[0].length
+            });
+          }
+        }
+      }
+
+      // 3. Parenthetical match (1, 2)
+      if (citationFormat === "auto" || citationFormat === "paren") {
         let match;
         const parenRe = new RegExp(PAREN_REGEX);
         while ((match = parenRe.exec(rText)) !== null) {

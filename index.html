@@ -68,6 +68,27 @@
         </div>
       </div>
 
+      <!-- Citation Format Dropdown Control -->
+      <div class="format-selection-bar" style="margin: 18px 0; padding: 14px 18px; background: #faf7f9; border: 1px solid var(--border-outline); border-radius: var(--radius-sm);">
+        <label for="citationFormatSelect" style="display: block; font-weight: 600; font-size: 13px; color: var(--primary-wine); margin-bottom: 6px;">
+          How do citations appear in your manuscript?
+        </label>
+        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <select id="citationFormatSelect" style="padding: 8px 14px; border: 1px solid var(--border-outline); border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: 13px; color: var(--reading-ink-primary); background: #fff; flex: 1; min-width: 280px; cursor: pointer;">
+            <option value="auto">✨ Auto-Detect (Superscript, [1], (1), or .1)</option>
+            <option value="bracket">Square Brackets: [1], [1, 2], [1-3] (Nature / Vancouver / IEEE)</option>
+            <option value="paren">Parentheses: (1), (1, 2), (1-3) (Radiology / AMA format)</option>
+            <option value="sup">Pure Superscripts: ¹, ¹'², ¹⁻³ (AMA 11th edition)</option>
+            <option value="punct_sup">Punctuation-attached: .1, .1-3, ,2</option>
+            <option value="custom">Custom Format / Prefix-Suffix...</option>
+          </select>
+          <input type="text" id="customFormatInput" placeholder="Type pattern e.g. {1} or [Ref 1]" style="display: none; padding: 8px 12px; border: 1px solid var(--border-outline); border-radius: var(--radius-sm); font-size: 13px; width: 240px; background: #fff;">
+        </div>
+        <p style="font-size: 11px; color: var(--reading-ink-secondary); margin-top: 6px;">
+          Selecting your citation format ensures zero confusion between citations, list numbers, and statistical figures.
+        </p>
+      </div>
+
       <div class="dropzone-box" id="dropzone">
         <div class="drop-icon">📑</div>
         <div class="drop-title">Drag & drop your Word manuscript here</div>

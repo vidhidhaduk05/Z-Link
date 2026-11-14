@@ -61,7 +61,8 @@ def health():
 @app.post("/api/audit")
 async def audit_manuscript(
     file: Optional[UploadFile] = File(None),
-    text_content: Optional[str] = Form(None)
+    text_content: Optional[str] = Form(None),
+    citation_format: str = Form("auto")
 ):
     job_id = str(uuid.uuid4())
     filename = "manuscript.docx"
@@ -71,13 +72,13 @@ async def audit_manuscript(
         filename = file.filename
         file_bytes = await file.read()
         try:
-            paras, sites, references = parse_docx_manuscript(BytesIO(file_bytes))
+            paras, sites, references = parse_docx_manuscript(BytesIO(file_bytes), citation_format=citation_format)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse docx: {str(e)}")
     elif text_content:
         filename = "pasted_manuscript.txt"
         para_lines = [p.strip() for p in text_content.split("\n\n") if p.strip()]
-        paras, sites, references = parse_paragraphs_list(para_lines)
+        paras, sites, references = parse_paragraphs_list(para_lines, citation_format=citation_format)
     else:
         raise HTTPException(status_code=400, detail="Must provide either a .docx file or text_content.")
 

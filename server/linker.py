@@ -173,7 +173,7 @@ def link_docx_manuscript(
         if s.paragraph_idx >= len(doc.paragraphs):
             continue
         p = doc.paragraphs[s.paragraph_idx]
-        if s.kind == 'paren' and s.match_start is not None and s.match_end is not None:
+        if s.kind in ('paren', 'bracket') and s.match_start is not None and s.match_end is not None:
             if s.run_idx < len(p.runs):
                 sup_el = convert_paren_site(p, s.run_idx, s.match_start, s.match_end)
             else:

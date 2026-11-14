@@ -22,6 +22,8 @@ let appState = {
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const btnSample = document.getElementById('btnSample');
+const citationFormatSelect = document.getElementById('citationFormatSelect');
+const customFormatInput = document.getElementById('customFormatInput');
 const resultsSection = document.getElementById('resultsSection');
 const tableBody = document.getElementById('referencesTableBody');
 const manuscriptViewer = document.getElementById('manuscriptViewer');
@@ -108,6 +110,17 @@ if (btnSample) {
   });
 }
 
+if (citationFormatSelect && customFormatInput) {
+  citationFormatSelect.addEventListener('change', () => {
+    if (citationFormatSelect.value === 'custom') {
+      customFormatInput.style.display = 'inline-block';
+      customFormatInput.focus();
+    } else {
+      customFormatInput.style.display = 'none';
+    }
+  });
+}
+
 // ---------------- Pipeline Execution ----------------
 
 async function handleFileSelected(file) {
@@ -115,6 +128,8 @@ async function handleFileSelected(file) {
     alert("Please upload a Microsoft Word document (.docx).");
     return;
   }
+
+  const selectedFormat = citationFormatSelect ? citationFormatSelect.value : 'auto';
 
   appState.currentFile = file;
   appState.fileName = file.name;
@@ -126,7 +141,7 @@ async function handleFileSelected(file) {
 
   // 1. In-Browser Parse
   try {
-    const parsed = await parseDocxFile(file);
+    const parsed = await parseDocxFile(file, selectedFormat);
     appState.parsedData = parsed;
   } catch (err) {
     alert("Failed to parse Word document: " + err.message);
