@@ -14,7 +14,7 @@ from server.models import AuditSummary, ReferenceEntry, CitationSite, Validation
 from server.parser import parse_docx_manuscript, parse_paragraphs_list
 from server.validator import validate_single_reference, map_usage_and_sequence
 from server.ris_generator import generate_ris
-from server.linker import link_docx_manuscript
+from server.linker import link_docx_manuscript, build_ama_renumbering_map
 
 app = FastAPI(
     title="Co-Scientist Reference Auditor & Zotero Linker",
@@ -129,6 +129,9 @@ async def audit_manuscript(
         mappings=mappings
     )
 
+    # Calculate AMA Sequential Renumbering Map
+    mapping, first_seen_order, uncited = build_ama_renumbering_map(references, sites)
+
     JOBS_CACHE[job_id] = {
         "summary": summary,
         "file_bytes": file_bytes,
@@ -137,10 +140,13 @@ async def audit_manuscript(
         "sites": sites,
         "references": references,
         "verdicts": verdicts,
-        "mappings": mappings
+        "mappings": mappings,
+        "mapping": mapping,
+        "first_seen_order": first_seen_order,
+        "uncited": uncited
     }
 
-    return {"job_id": job_id, "summary": summary}
+    return {"job_id": job_id, "summary": summary, "ama_mapping": mapping}
 
 @app.post("/api/link/{job_id}")
 async def link_manuscript(job_id: str):
@@ -157,10 +163,11 @@ async def link_manuscript(job_id: str):
         sites=job["sites"],
         references=job["references"],
         verdicts=job["verdicts"],
-        output_target=out_stream
+        output_target=out_stream,
+        renumber_ama=True
     )
     job["linked_bytes"] = out_stream.getvalue()
-    job["ris_text"] = generate_ris(job["references"], job["verdicts"])
+    job["ris_text"] = generate_ris(job["references"], job["verdicts"], mapping=job.get("mapping"))
 
     return {
         "job_id": job_id,

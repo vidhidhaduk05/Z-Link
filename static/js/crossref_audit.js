@@ -103,8 +103,8 @@ async function queryCrossrefApi(cleanDoi) {
       const authors = (msg.author || []).map(a => `${a.family || ''} ${a.given || ''}`.trim());
       const journal = (msg['container-title'] && msg['container-title'].length > 0) ? msg['container-title'][0] : "";
       const issued = (msg.issued && msg.issued['date-parts'] && msg.issued['date-parts'][0]) ? msg.issued['date-parts'][0][0] : "";
-      const resourceUrl = (msg.resource && msg.resource.primary && msg.resource.primary.URL) 
-        ? msg.resource.primary.URL 
+      const resourceUrl = (msg.resource && msg.resource.primary && msg.resource.primary.URL)
+        ? msg.resource.primary.URL
         : `https://doi.org/${cleanDoi}`;
 
       return {

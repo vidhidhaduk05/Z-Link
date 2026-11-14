@@ -283,8 +283,29 @@ function computeUsageMappings() {
     }
   });
 
-  metricSequence.textContent = seqValid ? "Consecutive (Valid)" : "Warnings Detected";
-  metricSequence.style.color = seqValid ? "var(--status-reachable)" : "var(--status-broken)";
+  // Calculate AMA Sequential 1..N mapping
+  const amaMapping = {};
+  firstSeenOrder.forEach((oldNum, idx) => {
+    amaMapping[oldNum] = idx + 1;
+  });
+  let nextUncited = firstSeenOrder.length + 1;
+  references.forEach(r => {
+    if (!firstSeenOrder.includes(r.ref_num)) {
+      amaMapping[r.ref_num] = nextUncited++;
+    }
+  });
+
+  const hasOrderChanges = Object.keys(amaMapping).some(k => parseInt(k, 10) !== amaMapping[k]);
+  appState.amaMapping = amaMapping;
+  appState.firstSeenOrder = firstSeenOrder;
+  appState.hasOrderChanges = hasOrderChanges;
+
+  if (hasOrderChanges) {
+    metricSequence.innerHTML = `<span style="color: #b45309;" title="Auto-Renumbering Active: Citations will be re-ordered consecutively 1..N in Word and RIS">Auto-Reordering to AMA 1..N</span>`;
+  } else {
+    metricSequence.textContent = "Consecutive (Valid 1..N)";
+    metricSequence.style.color = "var(--status-reachable)";
+  }
 
   references.forEach(r => {
     const m = mappings[r.ref_num];
@@ -349,8 +370,14 @@ function renderAuditTable() {
       ? v.crossref_authors.slice(0, 3).join(', ') + (v.crossref_authors.length > 3 ? ' et al.' : '')
       : (ref.authors.slice(0, 2).join(', ') || '—');
 
+    const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
+    const isRenumbered = amaNum !== ref.ref_num;
+    const renumberedTag = isRenumbered 
+      ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ AMA #${amaNum}</span>` 
+      : '';
+
     tr.innerHTML = `
-      <td class="ref-num-cell">[${ref.ref_num}]</td>
+      <td class="ref-num-cell">[${ref.ref_num}]${renumberedTag}</td>
       <td>
         <strong>${titleDisplay}</strong><br/>
         <span style="color: var(--reading-ink-secondary); font-size: 12px;">${authorDisplay}</span>
@@ -510,8 +537,8 @@ function highlightSentenceInManuscript(refNum) {
 btnDownloadDocx.addEventListener('click', async () => {
   if (!appState.parsedData) return;
   try {
-    btnDownloadDocx.textContent = '⏳ Injecting Fields...';
-    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts);
+    btnDownloadDocx.textContent = '⏳ Injecting & Re-ordering...';
+    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true);
     const baseName = appState.fileName.replace(/\.docx$/i, '');
     downloadBlob(blob, `${baseName}_zotero_linked.docx`);
     btnDownloadDocx.textContent = '📥 Download Zotero-Linked (.docx)';
@@ -523,7 +550,7 @@ btnDownloadDocx.addEventListener('click', async () => {
 
 btnDownloadRis.addEventListener('click', () => {
   if (!appState.parsedData) return;
-  const risText = generateClientRis(appState.parsedData.references, appState.verdicts);
+  const risText = generateClientRis(appState.parsedData.references, appState.verdicts, appState.amaMapping);
   const blob = new Blob([risText], { type: 'application/x-research-info-systems' });
   const baseName = appState.fileName.replace(/\.docx$/i, '');
   downloadBlob(blob, `${baseName}_references.ris`);

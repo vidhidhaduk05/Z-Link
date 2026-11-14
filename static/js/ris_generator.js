@@ -2,11 +2,15 @@
  * Standards-compliant RIS Generator for Browser & Zotero Import
  */
 
-export function generateClientRis(references, verdicts = {}) {
+export function generateClientRis(references, verdicts = {}, mapping = null) {
   const lines = [];
+  const sortedRefs = mapping 
+    ? [...references].sort((a, b) => (mapping[a.ref_num] || a.ref_num) - (mapping[b.ref_num] || b.ref_num))
+    : references;
 
-  for (const ref of references) {
+  for (const ref of sortedRefs) {
     const v = verdicts[ref.ref_num] || {};
+    const newNum = mapping ? (mapping[ref.ref_num] || ref.ref_num) : ref.ref_num;
     const title = v.crossref_title || ref.title || "Untitled Article";
     const authors = (v.crossref_authors && v.crossref_authors.length > 0) ? v.crossref_authors : (ref.authors || ["Unknown Author"]);
     const journal = v.crossref_journal || ref.journal || "";
@@ -17,6 +21,8 @@ export function generateClientRis(references, verdicts = {}) {
     const doi = ref.doi || "";
 
     lines.push("TY  - JOUR");
+    lines.push(`ID  - ITEM-${newNum}`);
+    lines.push(`M1  - Ref ${newNum}`);
     for (const a of authors) {
       lines.push(`AU  - ${a}`);
     }

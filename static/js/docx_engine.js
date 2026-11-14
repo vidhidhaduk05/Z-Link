@@ -403,19 +403,102 @@ function createFieldRun(doc, type, instrText = null) {
   return r;
 }
 
-export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}) {
+export function formatCondensedCitation(nums) {
+  if (!nums || nums.length === 0) return "";
+  const sortedUnique = Array.from(new Set(nums)).sort((a,b) => a - b);
+  const ranges = [];
+  let start = sortedUnique[0];
+  let end = start;
+
+  for (let i = 1; i < sortedUnique.length; i++) {
+    const n = sortedUnique[i];
+    if (n === end + 1) {
+      end = n;
+    } else {
+      if (end - start >= 2) {
+        ranges.push(`${start}-${end}`);
+      } else if (end - start === 1) {
+        ranges.push(`${start},${end}`);
+      } else {
+        ranges.push(`${start}`);
+      }
+      start = n;
+      end = n;
+    }
+  }
+
+  if (end - start >= 2) {
+    ranges.push(`${start}-${end}`);
+  } else if (end - start === 1) {
+    ranges.push(`${start},${end}`);
+  } else {
+    ranges.push(`${start}`);
+  }
+
+  return ranges.join(",");
+}
+
+export function buildAmaRenumberingMap(references, sites) {
+  const refNums = references.map(r => r.ref_num);
+  const firstSeenOrder = [];
+  const seenSet = new Set();
+
+  sites.forEach(site => {
+    site.nums.forEach(num => {
+      if (!seenSet.has(num) && refNums.includes(num)) {
+        seenSet.add(num);
+        firstSeenOrder.push(num);
+      }
+    });
+  });
+
+  sites.forEach(site => {
+    site.nums.forEach(num => {
+      if (!seenSet.has(num)) {
+        seenSet.add(num);
+        firstSeenOrder.push(num);
+      }
+    });
+  });
+
+  const uncited = refNums.filter(n => !seenSet.has(n));
+  const mapping = {};
+
+  firstSeenOrder.forEach((oldNum, idx) => {
+    mapping[oldNum] = idx + 1;
+  });
+
+  const startUncited = firstSeenOrder.length + 1;
+  uncited.forEach((oldNum, idx) => {
+    mapping[oldNum] = startUncited + idx;
+  });
+
+  return { mapping, firstSeenOrder, uncited };
+}
+
+export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}, renumberAma = true) {
   const { zip, xmlDoc, paragraphs, sites, references } = parsedData;
+
+  // Determine AMA sequential re-numbering map
+  let mapping = {};
+  if (renumberAma) {
+    const res = buildAmaRenumberingMap(references, sites);
+    mapping = res.mapping;
+  } else {
+    references.forEach(r => { mapping[r.ref_num] = r.ref_num; });
+  }
 
   const cslMap = {};
   for (const ref of references) {
     const v = verdicts[ref.ref_num] || {};
+    const newNum = mapping[ref.ref_num] || ref.ref_num;
     const title = v.crossref_title || ref.title || "Article";
     const journal = v.crossref_journal || ref.journal || "";
     const year = v.crossref_year || ref.year || "2020";
     const authors = (v.crossref_authors && v.crossref_authors.length > 0) ? v.crossref_authors : (ref.authors || ["Author"]);
     
-    cslMap[ref.ref_num] = {
-      id: `ITEM-${ref.ref_num}`,
+    cslMap[newNum] = {
+      id: `ITEM-${newNum}`,
       type: "article-journal",
       title: title,
       "container-title": journal,
@@ -454,14 +537,15 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}) {
       rPr.appendChild(va);
     }
 
-    // Format plain numbers (e.g. "1,2")
-    const numStr = site.nums.join(",");
+    // Format new numbers with AMA range condensation
+    const newSiteNums = Array.from(new Set(site.nums.map(n => mapping[n] || n))).sort((a,b) => a - b);
+    const condensedStr = formatCondensedCitation(newSiteNums);
     const tNodes = targetRun.getElementsByTagNameNS(W_NS, "t");
     if (tNodes.length > 0) {
-      tNodes[0].textContent = numStr;
+      tNodes[0].textContent = condensedStr;
     }
 
-    const citationItems = site.nums.map(n => ({
+    const citationItems = newSiteNums.map(n => ({
       id: `zotero_key_${n}`,
       uris: [`http://zotero.org/users/0/items/zotero_key_${n}`],
       itemData: cslMap[n] || {}
@@ -470,8 +554,8 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}) {
     const citationJson = {
       citationID: Math.random().toString(36).substring(2, 10),
       properties: {
-        formattedCitation: numStr,
-        plainCitation: numStr,
+        formattedCitation: condensedStr,
+        plainCitation: condensedStr,
         noteIndex: 0
       },
       citationItems: citationItems,
@@ -494,15 +578,54 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}) {
     }
   }
 
-  // Bibliography wrapper
-  const refParas = paragraphs.filter(p => {
+  // Bibliography wrapper & reordering
+  const refStartRe = /^(\d{1,3})\.\s*(.*)$/;
+  const refParasInfo = [];
+  paragraphs.forEach(p => {
     const t = Array.from(p.getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
-    return /^\d{1,3}\.\s/.test(t);
+    const m = t.match(refStartRe);
+    if (m) {
+      const oldN = parseInt(m[1], 10);
+      const newN = mapping[oldN] || oldN;
+      refParasInfo.push({ oldN, newN, p, rest: m[2], m });
+    }
   });
 
-  if (refParas.length > 0) {
-    const firstP = refParas[0];
-    const lastP = refParas[refParas.length - 1];
+  if (refParasInfo.length > 0) {
+    // Re-number leading digit of each bibliography paragraph
+    refParasInfo.forEach(item => {
+      const oldPrefix = item.oldN + ".";
+      const newPrefix = item.newN + ".";
+      const tNodes = Array.from(item.p.getElementsByTagNameNS(W_NS, "t"));
+      let replaced = false;
+      for (const t of tNodes) {
+        if (t.textContent.includes(oldPrefix)) {
+          t.textContent = t.textContent.replace(oldPrefix, newPrefix);
+          replaced = true;
+          break;
+        }
+      }
+      if (!replaced && tNodes.length > 0) {
+        tNodes[0].textContent = `${item.newN}. ${item.rest}`;
+      }
+    });
+
+    let firstP = refParasInfo[0].p;
+    let lastP = refParasInfo[refParasInfo.length - 1].p;
+
+    // Reorder paragraph DOM elements according to newN
+    if (renumberAma && refParasInfo.length > 1) {
+      const parent = firstP.parentNode;
+      if (parent) {
+        const sortedPInfo = [...refParasInfo].sort((a, b) => a.newN - b.newN);
+        const anchorNode = lastP.nextSibling;
+        sortedPInfo.forEach(item => {
+          parent.insertBefore(item.p, anchorNode);
+        });
+        firstP = sortedPInfo[0].p;
+        lastP = sortedPInfo[sortedPInfo.length - 1].p;
+      }
+    }
 
     const bibInstr = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY';
     const bBegin = createFieldRun(xmlDoc, "begin");

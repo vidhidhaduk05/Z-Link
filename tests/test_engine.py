@@ -5,6 +5,7 @@ import os
 import sys
 import unittest
 import docx
+import re
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -431,6 +432,127 @@ class TestZoteroLinkEngine(unittest.TestCase):
         doi_oa, meta_oa = search_openalex_bibliographic("", title_oa)
         self.assertTrue(bool(doi_oa), "OpenAlex should find Brain arteriovenous malformations paper")
         self.assertIn("10.1038/nrdp.2015.8", doi_oa.lower())
+
+    def test_21_ama_sequential_renumbering_and_reordering(self):
+        from io import BytesIO
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from server.ris_generator import generate_ris
+
+        # Create a real docx with out-of-order citations: [3] first, [1] second, [2] third
+        doc = docx.Document()
+        doc.add_paragraph("INTRODUCTION")
+        doc.add_paragraph("Third Author made the breakthrough finding [3].")
+        doc.add_paragraph("Subsequently First Author published the initial cohort [1].")
+        doc.add_paragraph("Finally Second Author drafted the consensus statement [2].")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. First Author. Article One. 2021. doi: 10.1038/s41586-020-2649-2")
+        doc.add_paragraph("2. Second Author. Article Two. 2022. doi: 10.1056/NEJMoa2002032")
+        doc.add_paragraph("3. Third Author. Article Three. 2023. doi: 10.1038/nature12373")
+
+        in_stream = BytesIO()
+        doc.save(in_stream)
+        in_stream.seek(0)
+
+        # Parse document
+        paras, sites, refs = parse_docx_manuscript(in_stream, citation_format="bracket")
+        self.assertEqual(len(refs), 3)
+        self.assertEqual(len(sites), 3)
+
+        # Link and renumber according to AMA style
+        in_stream.seek(0)
+        out_stream = BytesIO()
+        link_docx_manuscript(in_stream, sites, refs, output_target=out_stream, renumber_ama=True)
+        out_stream.seek(0)
+
+        # Verify output docx
+        out_doc = docx.Document(out_stream)
+        out_paras = [p.text.strip() for p in out_doc.paragraphs if p.text.strip()]
+
+        # Find bibliography paragraphs in output
+        ref_lines = [p for p in out_paras if re.match(r'^\d{1,3}\.\s', p)]
+        self.assertEqual(len(ref_lines), 3, "Must have exactly 3 bibliography entries")
+
+        # Ref 1 must be Third Author (cited first!)
+        self.assertTrue(ref_lines[0].startswith("1. Third Author"), f"First ref must be Third Author, got: {ref_lines[0]}")
+        # Ref 2 must be First Author (cited second!)
+        self.assertTrue(ref_lines[1].startswith("2. First Author"), f"Second ref must be First Author, got: {ref_lines[1]}")
+        # Ref 3 must be Second Author (cited third!)
+        self.assertTrue(ref_lines[2].startswith("3. Second Author"), f"Third ref must be Second Author, got: {ref_lines[2]}")
+
+        # Check in-text citations: must be 1, 2, 3 in order
+        in_text_paras = [p.text for p in out_doc.paragraphs[:5]]
+        self.assertIn("Third Author made the breakthrough finding", in_text_paras[1])
+        self.assertTrue(in_text_paras[1].endswith(".1") or in_text_paras[1].endswith(" 1"))
+        self.assertIn("Subsequently First Author published the initial cohort", in_text_paras[2])
+        self.assertTrue(in_text_paras[2].endswith(".2") or in_text_paras[2].endswith(" 2"))
+        self.assertIn("Finally Second Author drafted the consensus statement", in_text_paras[3])
+        self.assertTrue(in_text_paras[3].endswith(".3") or in_text_paras[3].endswith(" 3"))
+
+    def test_22_ama_range_condensation(self):
+        from server.linker import format_condensed_citation
+        self.assertEqual(format_condensed_citation([1]), "1")
+        self.assertEqual(format_condensed_citation([1, 2]), "1,2")
+        self.assertEqual(format_condensed_citation([1, 2, 3]), "1-3")
+        self.assertEqual(format_condensed_citation([3, 1, 2]), "1-3")
+        self.assertEqual(format_condensed_citation([1, 2, 3, 5]), "1-3,5")
+        self.assertEqual(format_condensed_citation([1, 3, 4, 5, 7, 8, 9]), "1,3-5,7-9")
+
+    def test_23_uncited_reference_placed_at_end(self):
+        from io import BytesIO
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript, build_ama_renumbering_map
+
+        # Manuscript where ref 2 is never cited (only 1 and 3 are cited)
+        doc = docx.Document()
+        doc.add_paragraph("INTRODUCTION")
+        doc.add_paragraph("First Author reported the original discovery [1].")
+        doc.add_paragraph("Third Author confirmed the clinical trial [3].")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. First Author. 2021.")
+        doc.add_paragraph("2. Uncited Author. 2022.")
+        doc.add_paragraph("3. Third Author. 2023.")
+
+        in_stream = BytesIO()
+        doc.save(in_stream)
+        in_stream.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_stream, citation_format="bracket")
+        mapping, first_seen, uncited = build_ama_renumbering_map(refs, sites)
+
+        # Ref 1 -> 1
+        # Ref 3 -> 2
+        # Ref 2 (uncited) -> 3 (appended at end)
+        self.assertEqual(mapping[1], 1)
+        self.assertEqual(mapping[3], 2)
+        self.assertEqual(mapping[2], 3)
+        self.assertEqual(uncited, [2])
+
+        # Link and check bibliography re-ordering
+        in_stream.seek(0)
+        out_stream = BytesIO()
+        link_docx_manuscript(in_stream, sites, refs, output_target=out_stream, renumber_ama=True)
+        out_stream.seek(0)
+
+        out_doc = docx.Document(out_stream)
+        ref_lines = [p.text.strip() for p in out_doc.paragraphs if re.match(r'^\d{1,3}\.\s', p.text.strip())]
+        self.assertEqual(len(ref_lines), 3)
+        self.assertTrue(ref_lines[0].startswith("1. First Author"))
+        self.assertTrue(ref_lines[1].startswith("2. Third Author"))
+        self.assertTrue(ref_lines[2].startswith("3. Uncited Author"))
+
+    def test_24_acta2_identity_permutation(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import build_ama_renumbering_map
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript not present")
+        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        mapping, first_seen, uncited = build_ama_renumbering_map(refs, sites)
+        self.assertEqual(len(uncited), 0, "All 43 references are cited in ACTA2")
+        # Every reference number maps to itself: mapping[n] == n for all n
+        for n in range(1, 44):
+            self.assertEqual(mapping[n], n, f"Reference {n} must map to itself in ACTA2")
 
 if __name__ == "__main__":
     unittest.main()

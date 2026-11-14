@@ -4,13 +4,23 @@ Standards-compliant RIS File Generator.
 from typing import List, Dict
 from server.models import ReferenceEntry, ValidationVerdict
 
-def generate_ris(references: List[ReferenceEntry], verdicts: Dict[int, ValidationVerdict] = None) -> str:
+def generate_ris(
+    references: List[ReferenceEntry],
+    verdicts: Dict[int, ValidationVerdict] = None,
+    mapping: Dict[int, int] = None
+) -> str:
     """
     Format reference records as standard RIS for Zotero/EndNote import.
+    When mapping is provided, references are ordered and labeled by their new AMA sequential numbers.
     """
+    sorted_refs = references
+    if mapping:
+        sorted_refs = sorted(references, key=lambda r: mapping.get(r.ref_num, r.ref_num))
+
     lines = []
-    for ref in references:
+    for ref in sorted_refs:
         v = (verdicts or {}).get(ref.ref_num)
+        new_num = mapping.get(ref.ref_num, ref.ref_num) if mapping else ref.ref_num
         
         # Merge best metadata (Crossref preferred if available)
         title = (v.crossref_title if v and v.crossref_title else ref.title) or "Untitled Document"
@@ -23,6 +33,8 @@ def generate_ris(references: List[ReferenceEntry], verdicts: Dict[int, Validatio
         doi = ref.doi or ""
 
         lines.append("TY  - JOUR")
+        lines.append(f"ID  - ITEM-{new_num}")
+        lines.append(f"M1  - Ref {new_num}")
         for a in authors:
             lines.append(f"AU  - {a}")
         lines.append(f"TI  - {title}")
