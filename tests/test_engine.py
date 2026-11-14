@@ -223,6 +223,109 @@ class TestZoteroLinkEngine(unittest.TestCase):
             # Verify total sites
             self.assertEqual(len(sites), 2, f"Mode {mode}: Exactly 2 citations should be found")
 
+    def test_11_clinical_abbreviations_and_percentages(self):
+        from server.parser import parse_paragraphs_list
+
+        doc_with_stats = [
+            "INTRODUCTION",
+            "In patients with severe stenosis (>70%), treatment with stenting reduced stroke risk (OR 1.45, 95% CI 1.12-1.89; P < .001).",
+            "The trial enrolled a cohort (n = 120) receiving antiplatelet therapy (75 mg/day). Average hospital stay was (mean 4.2 ± 1.1 days).",
+            "Previous investigators observed similar treatment response (1).",
+            "REFERENCES",
+            "1. Clinical Investigator. Randomized Stroke Trial. 2023. doi: 10.1056/NEJMoa2002032"
+        ]
+
+        paras, sites, refs = parse_paragraphs_list(doc_with_stats, citation_format="auto")
+        detected_texts = [s.text for s in sites]
+        
+        # Verify statistics and cohort abbreviations are NOT matched
+        self.assertNotIn("(>70%)", detected_texts)
+        self.assertNotIn("(OR 1.45, 95% CI 1.12-1.89; P < .001)", detected_texts)
+        self.assertNotIn("(n = 120)", detected_texts)
+        self.assertNotIn("(75 mg/day)", detected_texts)
+        self.assertNotIn("(mean 4.2 ± 1.1 days)", detected_texts)
+        
+        # Only true citation (1) should be found
+        self.assertEqual(len(sites), 1)
+        self.assertEqual(sites[0].text, "(1)")
+        self.assertEqual(sites[0].nums, [1])
+
+    def test_12_consecutive_order_detection(self):
+        from server.parser import parse_paragraphs_list
+        from server.validator import map_usage_and_sequence
+
+        # Create out-of-order manuscript: cites [3] first, then [1], then [2]
+        out_of_order_doc = [
+            "INTRODUCTION",
+            "Initial observation was made by Third Author (3).",
+            "Subsequently First Author confirmed this finding (1).",
+            "Finally Second Author published the consensus (2).",
+            "REFERENCES",
+            "1. First Author. 2020. doi: 10.1038/s41586-020-2649-2",
+            "2. Second Author. 2021. doi: 10.1056/NEJMoa2002032",
+            "3. Third Author. 2022. doi: 10.1038/nature12373"
+        ]
+
+        paras, sites, refs = parse_paragraphs_list(out_of_order_doc, citation_format="paren")
+        ref_map, seq_valid, warnings = map_usage_and_sequence(refs, sites)
+
+        self.assertFalse(seq_valid, "Non-consecutive citation order must be flagged as invalid")
+        self.assertGreaterEqual(len(warnings), 1, "Must generate sequence warning when [3] is cited before [1]")
+        self.assertIn("Reference [3] was cited before Reference [1]", warnings[0])
+
+    def test_13_ris_metadata_completeness(self):
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript not present")
+
+        paras, sites, refs = parse_docx_manuscript(doc_path)
+        ris = generate_ris(refs)
+
+        # Check required standard RIS tags
+        self.assertIn("TY  - JOUR", ris)
+        self.assertIn("TI  -", ris)
+        self.assertIn("AU  -", ris)
+        self.assertIn("DO  -", ris)
+        self.assertIn("ER  -", ris)
+        self.assertEqual(ris.count("ER  -"), 43, "Must have exactly 43 ER tags for 43 references")
+
+    def test_14_docx_native_fields_xml_integrity(self):
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript not present")
+
+        paras, sites, refs = parse_docx_manuscript(doc_path)
+        out_target = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_integrity_check.docx"
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_target)
+
+        # Open linked document and verify full XML structure
+        linked_doc = docx.Document(out_target)
+        self.assertEqual(len(linked_doc.paragraphs), len(paras))
+        self.assertEqual(len(linked_doc.tables), 11)
+
+        # Verify tables content is not corrupted
+        first_table = linked_doc.tables[0]
+        self.assertGreater(len(first_table.rows), 0)
+
+        # Clean up test artifact
+        if os.path.exists(out_target):
+            os.remove(out_target)
+
+    def test_15_empty_and_corrupt_files(self):
+        from server.parser import parse_paragraphs_list
+
+        # Empty document
+        empty_paras, empty_sites, empty_refs = parse_paragraphs_list([], citation_format="auto")
+        self.assertEqual(len(empty_paras), 0)
+        self.assertEqual(len(empty_sites), 0)
+        self.assertEqual(len(empty_refs), 0)
+
+        # Document with no references section
+        no_ref_paras = ["This is just a paper with no bibliography.", "Some text here."]
+        paras, sites, refs = parse_paragraphs_list(no_ref_paras, citation_format="auto")
+        self.assertEqual(len(refs), 0)
+        self.assertEqual(len(sites), 0)
+
 if __name__ == "__main__":
     unittest.main()
 
