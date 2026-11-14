@@ -112,17 +112,70 @@ def query_crossref(doi: str) -> Dict:
     except requests.exceptions.RequestException:
         return {}
 
+def check_title_similarity(target_title: str, candidate_title: str) -> float:
+    """Compute word overlap ratio between reference title and candidate title."""
+    if not target_title or not candidate_title:
+        return 0.0
+    clean_target = set(re.findall(r'\b[a-z]{3,}\b', target_title.lower()))
+    clean_cand = set(re.findall(r'\b[a-z]{3,}\b', re.sub(r'<[^>]+>', '', candidate_title).lower()))
+    if not clean_target or not clean_cand:
+        return 0.0
+    common = clean_target.intersection(clean_cand)
+    return len(common) / min(len(clean_target), len(clean_cand))
+
+def search_crossref_bibliographic(raw_text: str, title: str = "", authors: List[str] = None) -> Tuple[str, Dict]:
+    """
+    Search Crossref for a reference missing a DOI.
+    Uses complete raw bibliographic text (authors + title + journal + year) for Crossref reference matcher.
+    """
+    query_str = raw_text if (raw_text and len(raw_text) > 20) else title
+    query_str = re.sub(r'^\d+\.\s*', '', query_str).strip()
+    if not query_str or len(query_str) < 15:
+        return "", {}
+
+    headers = {"User-Agent": f"CoScientist-Auditor/1.0 (mailto:coscientist-auditor@academic.org)"}
+    params = {"query.bibliographic": query_str[:300], "rows": 1}
+    try:
+        r = requests.get(CROSSREF_API, params=params, headers=headers, timeout=TIMEOUT)
+        if r.status_code == 200:
+            items = r.json().get("message", {}).get("items", [])
+            if items:
+                top = items[0]
+                doi = top.get("DOI", "")
+                top_title = (top.get("title") or [""])[0]
+                score = top.get("score", 0)
+                # Verify match confidence: require good score and title overlap if title is known
+                if doi and score >= 40:
+                    if title and len(title) > 15:
+                        sim = check_title_similarity(title, top_title)
+                        if sim < 0.45:
+                            return "", {}
+                    return doi, top
+    except Exception:
+        pass
+    return "", {}
+
 def validate_single_reference(ref: ReferenceEntry) -> ValidationVerdict:
     notes = []
     doi = ref.doi
+    is_recovered = False
     
+    # If DOI is missing from reference line, attempt automatic recovery via Crossref
     if not doi:
-        return ValidationVerdict(
-            ref_num=ref.ref_num,
-            status="missing_doi",
-            is_reachable=False,
-            notes=["No DOI detected in reference line."]
-        )
+        recovered_doi, cr_recovered = search_crossref_bibliographic(ref.raw_text, ref.title, ref.authors)
+        if recovered_doi:
+            ref.doi = recovered_doi
+            doi = recovered_doi
+            is_recovered = True
+            notes.append(f"Auto-resolved missing DOI via Crossref registry: {recovered_doi}")
+        else:
+            return ValidationVerdict(
+                ref_num=ref.ref_num,
+                status="missing_doi",
+                is_reachable=False,
+                is_recovered_doi=False,
+                notes=["No DOI detected in reference line and no match found in registry."]
+            )
 
     # 1. Reachability & Bot Verification Check
     is_reachable, is_bot_protected, http_code, resolved_url = check_doi_reachability(doi)
@@ -155,10 +208,13 @@ def validate_single_reference(ref: ReferenceEntry) -> ValidationVerdict:
         cr_issue = cr_data.get("issue", "")
         cr_pages = cr_data.get("page", "")
         abstract = cr_data.get("abstract", "")
-        notes.append("Metadata verified against Crossref registry.")
+        if not is_recovered:
+            notes.append("Metadata verified against Crossref registry.")
 
     # Status classification
-    if is_bot_protected:
+    if is_recovered:
+        verdict_status = "recovered"
+    elif is_bot_protected:
         verdict_status = "bot_protected"
         notes.append("DOI registered in global Handle database. Publisher site presented anti-bot challenge (Cloudflare/WAF) or institutional paywall. Valid for human readers.")
     elif cr_found and is_reachable:
@@ -176,6 +232,8 @@ def validate_single_reference(ref: ReferenceEntry) -> ValidationVerdict:
         status=verdict_status,
         is_reachable=is_reachable,
         is_bot_gated=is_bot_protected,
+        is_recovered_doi=is_recovered,
+        recovered_doi=doi if is_recovered else "",
         http_status=http_code,
         resolved_url=resolved_url,
         crossref_found=cr_found,

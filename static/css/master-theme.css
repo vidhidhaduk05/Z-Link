@@ -518,6 +518,26 @@ main.app-container {
   border-color: #d97706;
 }
 
+.badge-reach.recovered {
+  background-color: #e0f2fe;
+  color: #0369a1;
+  border-color: #0284c7;
+}
+
+.badge-auto-recovered {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  font-family: var(--font-sans);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background-color: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #7dd3fc;
+}
+
 .badge-reach.registry {
   background-color: #f3eaf1;
   color: #814d75;

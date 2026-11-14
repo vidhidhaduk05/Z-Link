@@ -106,7 +106,8 @@ async def audit_manuscript(
 
     total_verified_live = sum(1 for v in verdicts.values() if v.status == "verified")
     total_bot_protected = sum(1 for v in verdicts.values() if v.status == "bot_protected")
-    total_reachable = total_verified_live + total_bot_protected
+    total_recovered = sum(1 for v in verdicts.values() if v.status == "recovered" or v.is_recovered_doi)
+    total_reachable = total_verified_live + total_bot_protected + total_recovered
     total_broken = sum(1 for v in verdicts.values() if v.status == "unreachable")
     total_missing = sum(1 for v in verdicts.values() if v.status == "missing_doi")
 
@@ -117,6 +118,7 @@ async def audit_manuscript(
         total_reachable=total_reachable,
         total_verified_live=total_verified_live,
         total_bot_protected=total_bot_protected,
+        total_recovered_doi=total_recovered,
         total_broken=total_broken,
         total_missing_doi=total_missing,
         consecutive_order_valid=seq_valid,

@@ -185,9 +185,12 @@ async function handleFileSelected(file) {
 
   // Process references concurrently
   const validationPromises = appState.parsedData.references.map(async (ref) => {
-    const verdict = await validateReferenceCrossref(ref.doi);
+    const verdict = await validateReferenceCrossref(ref.doi, ref.raw_text, ref.title);
     appState.verdicts[ref.ref_num] = verdict;
-    if (verdict.status === 'verified') reachableCount++;
+    if (verdict.is_recovered && verdict.recovered_doi) {
+      ref.doi = verdict.recovered_doi;
+    }
+    if (verdict.status === 'verified' || verdict.status === 'recovered') reachableCount++;
     else if (verdict.status === 'bot_protected' || verdict.is_bot_gated) botGatedCount++;
     else if (verdict.status === 'unreachable') brokenCount++;
 
@@ -288,8 +291,16 @@ function renderAuditTable() {
     let badgeClass = 'missing';
     let badgeText = 'No DOI';
     let actionBtnHtml = '';
+    let autoRecoveredPill = '';
 
-    if (v.status === 'bot_protected' || v.is_bot_gated) {
+    if (v.status === 'recovered' || v.is_recovered) {
+      badgeClass = 'recovered';
+      badgeText = '🔍 DOI Recovered';
+      autoRecoveredPill = `<span class="badge-auto-recovered" title="Automatically matched and verified via Crossref registry">Auto-Found</span>`;
+      if (ref.doi) {
+        actionBtnHtml = `<a href="https://doi.org/${encodeURIComponent(ref.doi)}" target="_blank" class="btn-open-ext" title="Verify auto-recovered DOI landing">Verify ↗</a>`;
+      }
+    } else if (v.status === 'bot_protected' || v.is_bot_gated) {
       badgeClass = 'bot-protected';
       badgeText = '🛡️ Bot Check / Paywall';
       if (ref.doi) {
@@ -319,7 +330,7 @@ function renderAuditTable() {
         ${v.crossref_journal ? `<br/><em style="color: var(--editorial-plum); font-size: 12px;">${v.crossref_journal} (${v.crossref_year || ''})</em>` : ''}
       </td>
       <td>
-        ${ref.doi ? `<a href="https://doi.org/${ref.doi}" target="_blank" style="color: var(--editorial-plum); word-break: break-all;">${ref.doi}</a>` : '<span style="color: var(--reading-ink-muted)">Missing</span>'}
+        ${ref.doi ? `<a href="https://doi.org/${ref.doi}" target="_blank" style="color: var(--editorial-plum); word-break: break-all;">${ref.doi}</a> ${autoRecoveredPill}` : '<span style="color: var(--reading-ink-muted)">Missing</span>'}
       </td>
       <td style="white-space: nowrap;">
         <span class="badge-reach ${badgeClass}">${badgeText}</span>

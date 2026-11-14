@@ -326,6 +326,31 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(len(refs), 0)
         self.assertEqual(len(sites), 0)
 
+    def test_16_missing_doi_automatic_recovery(self):
+        # 1. Reference without DOI that exists in Crossref
+        ref_no_doi = ReferenceEntry(
+            ref_num=1,
+            raw_text="1. Milewicz DM, Østergaard JR, Ala-Kokko L. De novo ACTA2 mutation causes a novel syndrome of multisystemic smooth muscle dysfunction. Am J Med Genet A. 2010;152A(10):2437-2443.",
+            title="De novo ACTA2 mutation causes a novel syndrome of multisystemic smooth muscle dysfunction",
+            authors=["Milewicz DM", "Østergaard JR", "Ala-Kokko L"],
+            doi=""
+        )
+        verdict = validate_single_reference(ref_no_doi)
+        self.assertTrue(verdict.is_recovered_doi, "Should automatically recover missing DOI")
+        self.assertEqual(verdict.recovered_doi.lower(), "10.1002/ajmg.a.33657")
+        self.assertTrue(verdict.is_reachable)
+
+        # 2. Non-indexed report without DOI (should NOT hallucinate)
+        ref_unindexed = ReferenceEntry(
+            ref_num=2,
+            raw_text="2. Hospital Committee. Clinical Internal Guideline 2024 for Local Floor Treatment.",
+            title="Clinical Internal Guideline 2024 for Local Floor Treatment",
+            doi=""
+        )
+        verdict_unidx = validate_single_reference(ref_unindexed)
+        self.assertFalse(verdict_unidx.is_recovered_doi, "Should not hallucinate DOI for local guidelines")
+        self.assertEqual(verdict_unidx.status, "missing_doi")
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -153,19 +153,70 @@ async function queryOpenAlex(cleanDoi) {
 }
 
 /**
+ * Query Crossref Bibliographic API to automatically recover a missing DOI
+ */
+async function recoverDoiFromBibliographic(rawText, title) {
+  const queryStr = (rawText && rawText.length > 20) ? rawText.replace(/^\d+\.\s*/, "") : (title || "");
+  if (!queryStr || queryStr.length < 15) return { found: false };
+
+  const url = `${CROSSREF_API}?query.bibliographic=${encodeURIComponent(queryStr.slice(0, 300))}&rows=1`;
+  try {
+    const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (resp.status === 200) {
+      const data = await resp.json();
+      const items = (data.message && data.message.items) ? data.message.items : [];
+      if (items.length > 0) {
+        const top = items[0];
+        if (top.DOI && top.score >= 40) {
+          const topTitle = (top.title && top.title.length > 0) ? top.title[0] : "";
+          if (title && title.length > 15) {
+            const tWords = new Set(title.toLowerCase().match(/\b[a-z]{3,}\b/g) || []);
+            const cWords = new Set(topTitle.toLowerCase().replace(/<[^>]+>/g, '').match(/\b[a-z]{3,}\b/g) || []);
+            let common = 0;
+            tWords.forEach(w => { if (cWords.has(w)) common++; });
+            const sim = common / Math.max(1, Math.min(tWords.size, cWords.size));
+            if (sim < 0.45) return { found: false };
+          }
+          return {
+            found: true,
+            doi: top.DOI,
+            title: topTitle,
+            item: top
+          };
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore
+  }
+  return { found: false };
+}
+
+/**
  * Master Reference Validation Function
  */
-export async function validateReferenceCrossref(doi) {
-  if (!doi) {
+export async function validateReferenceCrossref(doi, rawText = "", title = "") {
+  let cleanDoi = doi ? doi.trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '') : "";
+  let isRecovered = false;
+
+  // Auto-recover missing DOI
+  if (!cleanDoi && (rawText || title)) {
+    const rec = await recoverDoiFromBibliographic(rawText, title);
+    if (rec.found && rec.doi) {
+      cleanDoi = rec.doi;
+      isRecovered = true;
+    }
+  }
+
+  if (!cleanDoi) {
     return {
       status: "missing_doi",
       is_reachable: false,
       is_bot_gated: false,
-      notes: ["No DOI provided in reference entry."]
+      is_recovered: false,
+      notes: ["No DOI provided and no match found in scholarly registry (may be a book, guideline, or unpublished report)."]
     };
   }
-
-  const cleanDoi = doi.trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '');
 
   // Concurrently query Handle Foundation API and Crossref API
   const [handleRes, crRes] = await Promise.all([
@@ -191,9 +242,11 @@ export async function validateReferenceCrossref(doi) {
     // The DOI exists and is valid!
     if (isBotProtectedPublisher) {
       return {
-        status: "bot_protected",
+        status: isRecovered ? "recovered" : "bot_protected",
         is_reachable: true,
         is_bot_gated: true,
+        is_recovered: isRecovered,
+        recovered_doi: isRecovered ? cleanDoi : "",
         http_status: 403,
         resolved_url: effectiveUrl,
         crossref_found: isMetadataFound,
@@ -206,16 +259,18 @@ export async function validateReferenceCrossref(doi) {
         crossref_pages: meta.pages || "",
         abstract: meta.abstract || "",
         notes: [
-          "Registered active DOI.",
+          isRecovered ? `Auto-resolved missing DOI via Crossref: ${cleanDoi}` : "Registered active DOI.",
           "Publisher (e.g. Elsevier / Springer Nature / OUP / RSNA) protects landing page with anti-bot verification (Cloudflare/WAF) or institutional paywall.",
           "The link is valid and fully accessible for human readers in standard web browsers."
         ]
       };
     } else {
       return {
-        status: "verified",
+        status: isRecovered ? "recovered" : "verified",
         is_reachable: true,
         is_bot_gated: false,
+        is_recovered: isRecovered,
+        recovered_doi: isRecovered ? cleanDoi : "",
         http_status: 200,
         resolved_url: effectiveUrl,
         crossref_found: isMetadataFound,
@@ -227,7 +282,7 @@ export async function validateReferenceCrossref(doi) {
         crossref_issue: meta.issue || "",
         crossref_pages: meta.pages || "",
         abstract: meta.abstract || "",
-        notes: ["Validated and registered in scholarly database."]
+        notes: [isRecovered ? `Auto-resolved missing DOI via Crossref: ${cleanDoi}` : "Validated and registered in scholarly database."]
       };
     }
   }
