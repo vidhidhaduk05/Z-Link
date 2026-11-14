@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Co-Scientist Reference Auditor & Zotero Linker</title>
+  
+  <!-- Academic Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..700&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="static/css/master-theme.css">
+  <script src="static/js/jszip.min.js"></script>
+</head>
+<body>
+
+  <!-- Masthead -->
+  <header class="masthead">
+    <div class="brand-block">
+      <div class="brand-icon">📚</div>
+      <div>
+        <h1 class="brand-title">Co-Scientist Reference Auditor</h1>
+        <p class="brand-subtitle">Editorial Standards & Native Zotero Field Linker</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="badge-mode">🌐 Live GitHub Pages &bull; In-Browser Engine</span>
+    </div>
+  </header>
+
+  <main class="app-container">
+
+    <!-- Ponytail Guarded State Stepper -->
+    <nav class="stepper-bar">
+      <div class="step-item active" id="step-upload">
+        <span class="step-num">1</span>
+        <span>Upload Manuscript</span>
+      </div>
+      <div class="step-divider"></div>
+      <div class="step-item" id="step-parse">
+        <span class="step-num">2</span>
+        <span>OOXML Parsing</span>
+      </div>
+      <div class="step-divider"></div>
+      <div class="step-item" id="step-audit">
+        <span class="step-num">3</span>
+        <span>Crossref & Reachability</span>
+      </div>
+      <div class="step-divider"></div>
+      <div class="step-item" id="step-mapping">
+        <span class="step-num">4</span>
+        <span>Sentence Mapping</span>
+      </div>
+      <div class="step-divider"></div>
+      <div class="step-item" id="step-ready">
+        <span class="step-num">5</span>
+        <span>Zotero Deliverables</span>
+      </div>
+    </nav>
+
+    <!-- Upload & Ingestion Section -->
+    <section class="editorial-card" id="uploadSection">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">Manuscript Ingestion (.docx)</h2>
+          <p class="card-desc">Upload your Word manuscript with numbered citations (parenthetical or superscript) to audit reachability and inject native Zotero fields.</p>
+        </div>
+      </div>
+
+      <div class="dropzone-box" id="dropzone">
+        <div class="drop-icon">📑</div>
+        <div class="drop-title">Drag & drop your Word manuscript here</div>
+        <div class="drop-hint">Supports .docx documents with numbered AMA / Vancouver citations</div>
+        <input type="file" id="fileInput" accept=".docx" style="display: none;">
+      </div>
+
+      <div class="upload-actions-bar">
+        <button class="btn-editorial-secondary" id="btnSample">
+          📄 Load Sample Radiology Manuscript
+        </button>
+        <button class="btn-editorial-primary" onclick="document.getElementById('fileInput').click()">
+          📂 Select Word Document
+        </button>
+      </div>
+    </section>
+
+    <!-- Interactive Results & Explorer Section (Hidden initially) -->
+    <section id="resultsSection" style="display: none;">
+      
+      <!-- Metrics Bar -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">In-Text Citations</div>
+          <div class="metric-value" id="metricCitations">0</div>
+          <div class="metric-sub">Parenthetical & superscripts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Bibliography Refs</div>
+          <div class="metric-value" id="metricReferences">0</div>
+          <div class="metric-sub">Extracted references</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Reachable DOIs</div>
+          <div class="metric-value" id="metricReachable" style="color: var(--status-reachable);">0</div>
+          <div class="metric-sub">HTTP 200 via Crossref / Registry</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Broken / Invalid DOIs</div>
+          <div class="metric-value" id="metricBroken" style="color: var(--status-broken);">0</div>
+          <div class="metric-sub">HTTP 404 or unresolvable</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">AMA Numbering Sequence</div>
+          <div class="metric-value" id="metricSequence" style="font-size: 18px; margin-top: 10px;">Evaluating...</div>
+          <div class="metric-sub">Consecutive first-mention audit</div>
+        </div>
+      </div>
+
+      <!-- Deliverables Tray -->
+      <div class="deliverables-tray">
+        <div class="tray-info">
+          <h4>Deliverables Hub: Word & Zotero Export</h4>
+          <p>Download the transformed document with native Zotero fields (`ADDIN ZOTERO_ITEM`) and the clean RIS file.</p>
+        </div>
+        <div class="tray-buttons">
+          <button class="btn-editorial-primary" id="btnDownloadDocx">
+            📥 Download Zotero-Linked (.docx)
+          </button>
+          <button class="btn-editorial-secondary" id="btnDownloadRis">
+            📥 Download Corrected (.ris)
+          </button>
+          <button class="btn-editorial-secondary" id="btnDownloadReport">
+            📄 Referee Audit Report (.md)
+          </button>
+        </div>
+      </div>
+
+      <!-- Reference Audit Table -->
+      <div class="editorial-card" style="margin-top: 28px;">
+        <div class="card-header">
+          <div>
+            <h3 class="card-title">Scholarly Reference Audit & Reachability</h3>
+            <p class="card-desc">Click any reference to locate its exact citations and sentence occurrences in the manuscript text.</p>
+          </div>
+        </div>
+        <div class="editorial-table-wrap">
+          <table class="editorial-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Bibliographic Record</th>
+                <th>DOI Identifier</th>
+                <th>Reachability Status</th>
+                <th style="text-align: center;">In-Text Mentions</th>
+              </tr>
+            </thead>
+            <tbody id="referencesTableBody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Split Manuscript & Sentence Mapping Explorer -->
+      <div class="split-explorer">
+        
+        <!-- Left Pane: Manuscript Body -->
+        <div class="pane-container">
+          <div class="pane-title">Manuscript Preview & Citation Sites</div>
+          <div class="manuscript-body-text" id="manuscriptViewer">
+            <!-- Rendered via JS -->
+          </div>
+        </div>
+
+        <!-- Right Pane: Active Reference & Exact Sentences -->
+        <div class="pane-container">
+          <div class="pane-title">Reference Usage & Sentence Context</div>
+          <div id="activeRefCard">
+            <!-- Rendered via JS -->
+          </div>
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+
+  <script type="module" src="static/js/app.js"></script>
+</body>
+</html>
