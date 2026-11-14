@@ -66,3 +66,21 @@
   2. Implemented `CLINICAL_SCALE_RE` lookbehind checking for clinical evaluation terms (`graded on`, `score`, `scale`, `grade`, `severity`, `mRS`, `NIHSS`, `GCS`, `mTICI`, `TIMI`, `ASPECTS`, `angiography`, `perfusion`).
   3. Filtered out non-numeric tokens containing `<`, `>`, `%`, `CI`, `IQR`, and sub-grades (`2b-3`).
 - **Verification**: Verified via `test_10_clinical_scale_and_score_rejection` and `test_11_clinical_abbreviations_and_percentages` in `tests/test_engine.py` (15/15 tests passing).
+
+### [2026-11-14 17:15] ARCH-DECISION-007: Document Format Profiling, Multi-Registry DOI Recovery, & Multiline Reference Stitching
+- **Context**: Manuscripts using superscript numerical citations were suffering false detections when parenthetical numbers (such as manuscript tracking numbers or clinical measures) were encountered. Furthermore, references lacking DOIs required automated multi-registry recovery across CrossRef, Europe PMC, and OpenAlex, and multi-line references wrapped across soft line-breaks needed seamless stitching.
+- **Decision**:
+  1. Implemented **Document Format Profiling**: Auto-detects predominant citation style (`sup` vs `bracket`) with an 80% confidence threshold. In superscript-dominant manuscripts, parenthetical numbers are given parenthetical immunity.
+  2. Implemented **Multi-Registry Cascade**: Queries CrossRef, Europe PMC, and OpenAlex bibliographic search APIs to retrieve authoritative DOIs for un-annotated reference strings.
+  3. Implemented **Multiline Reference Stitching**: Stitches continuation paragraphs lacking a leading numbering token into the preceding reference entry.
+- **Verification**: Verified via `test_16_missing_doi_automatic_recovery`, `test_17_format_profiler_and_parenthetical_immunity`, `test_18_multiline_reference_stitching`, `test_19_section_heading_and_figure_legend_rejection`, and `test_20_multi_registry_doi_recovery_europepmc_openalex` (20/20 tests passing).
+
+### [2026-11-14 17:35] ARCH-DECISION-008: AMA Sequential Renumbering, Range Condensation, & Physical Bibliography DOM Re-Ordering
+- **Context**: In medical and scientific manuscripts adhering to AMA Manual of Style (11th ed.), references must be numbered consecutively in the order in which they are first cited in the text (Ref 1 must be the first cited reference). When authors insert, delete, or rearrange citations during drafting, reference numbering falls out of order. Simply updating the label numbers in-place leaves the bibliography entries out of physical order.
+- **Decision**:
+  1. **Deterministic Permutation Mapping**: Computed bijective permutation $\pi: \text{OldRefNum} \to \text{NewRefNum}$ based strictly on chronological order of first appearance in the manuscript body.
+  2. **Uncited Reference Appending**: Any references in the bibliography that were never cited in the body are deterministically mapped to the end ($N_{\text{cited}}+1, \dots$) with explicit audit warnings.
+  3. **In-Text Renumbering & Range Condensation**: Formatted runs into AMA condensed notation: 3 or more consecutive numbers condensed with hyphens (e.g. `[1, 2, 3]` $\to$ `1-3`, `[1, 2, 3, 5, 7, 8, 9]` $\to$ `1-3,5,7-9`), pairs separated by commas (`[1, 2]` $\to$ `1,2`). Updated native Zotero CSL field codes (`ADDIN ZOTERO_ITEM`).
+  4. **Physical Bibliography DOM Re-Ordering**: Rather than merely rewriting the leading numbering prefix (`3. Title` $\to$ `1. Title`), the underlying Word XML paragraph nodes (`<w:p>`) are extracted and re-inserted in sorted sequential order using `lxml` on the Python server (`parent.insert(insert_idx + idx, p._p)`) and DOM `insertBefore` in browser client (`docx_engine.js`).
+  5. **Synchronized RIS Export**: Both server and client RIS generators order records strictly by new AMA sequence, injecting `M1 - Ref {new_num}` and `ID - ITEM-{new_num}`.
+- **Verification**: Verified via `test_21_ama_sequential_renumbering_and_reordering`, `test_22_ama_range_condensation`, `test_23_uncited_reference_placed_at_end`, and `test_24_acta2_identity_permutation` (24/24 tests passing).
