@@ -49,3 +49,20 @@
   6. **Table & OOXML Structural Integrity**: Confirmed all 11 tables, supplementary methods, and all 176 paragraphs remain identical without corruption.
   7. **Native Zotero Field Injection**: Successfully generated `ACTA2_Manuscript_zotero_linked.docx` with 56 `ADDIN ZOTERO_ITEM` fields, `ADDIN ZOTERO_BIBL`, and `ADDIN ZOTERO_PREF_1`.
 - **Verification**: Verified via test `test_08_acta2_real_world_manuscript` in `tests/test_engine.py` (8/8 tests passing).
+
+### [2026-11-14 08:27] ARCH-DECISION-005: International DOI Foundation Handle API Integration & Anti-Bot Classification
+- **Context**: Several legitimate peer-reviewed articles were falsely classified as "Broken Link (404)" because academic publishers (Elsevier, Wiley, Springer Nature, Oxford University Press, RSNA) challenge automated requests with Cloudflare Turnstile or HTTP 403 bot-detection.
+- **Decision**: 
+  1. Integrated the official International DOI Foundation Handle REST API (`https://doi.org/api/handles/{doi}`) with universal CORS. Returns `responseCode: 1` and canonical publisher URLs for every officially registered DOI worldwide.
+  2. Implemented multi-tier classification: `Verified Live (200)`, `Bot Check / Paywall (Valid DOI)`, `Unresolvable (404)`, and `Missing DOI`.
+  3. Added one-click `Verify in Browser ↗` button allowing human reviewers to open protected papers directly in their authenticated browser sessions.
+  4. Both verified and bot-protected papers are 100% included in `.docx` Zotero linking and `.ris` exports.
+- **Verification**: Verified via `test_09_bot_verification_and_handle_discrimination` in `tests/test_engine.py` (0 false broken links across ACTA2 manuscript).
+
+### [2026-11-14 09:05] ARCH-DECISION-006: 5-Layer Clinical Scale & Statistical Discrimination Engine
+- **Context**: Clinical scoring systems and laboratory measurement ranges (e.g. `venous outflow was graded on CT angiography (0-8)`, `modified Rankin Scale (0-6)`, `<30%`, `2b-3`) were falsely triggering citation matchers.
+- **Decision**: 
+  1. Enforced the **Zero-Index Invariant**: Academic citations are 1-indexed. Any range containing 0 (`0-8`, `0-6`, `0`) is mathematically disqualified from being an academic citation.
+  2. Implemented `CLINICAL_SCALE_RE` lookbehind checking for clinical evaluation terms (`graded on`, `score`, `scale`, `grade`, `severity`, `mRS`, `NIHSS`, `GCS`, `mTICI`, `TIMI`, `ASPECTS`, `angiography`, `perfusion`).
+  3. Filtered out non-numeric tokens containing `<`, `>`, `%`, `CI`, `IQR`, and sub-grades (`2b-3`).
+- **Verification**: Verified via `test_10_clinical_scale_and_score_rejection` and `test_11_clinical_abbreviations_and_percentages` in `tests/test_engine.py` (15/15 tests passing).
