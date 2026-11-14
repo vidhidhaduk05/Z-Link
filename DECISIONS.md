@@ -28,3 +28,12 @@
   4. Exponent and unit lookbehinds: Excludes superscripts preceded by statistical characters ($R^2$, $\chi^2$, $\tau^2$, $I^2$, $\beta$) or physical units ($cm^3$, $mm^2$, $m^2$, $kg$).
   5. Affiliation lookbehind: Excludes author superscripts preceded by characters like `MD1`, `PhD2`.
 - **Verification**: Verified via test `test_06_citation_vs_number_discrimination` in `tests/test_engine.py` (100% pass rate).
+
+### [2026-11-14 06:52] ARCH-DECISION-003: Newspaper Newsprint Editorial Broadside Aesthetic
+- **Context**: User requested the full implementation of the vintage newspaper newsprint styling.
+- **Decision**: Implemented broadsheet typography:
+  - Masthead: `UnifrakturMaguntia` / `Newsreader` with folios (`VOL. CXXVI • NO. 42`), authentic double rules (`3px double #2f2f2f`), and Roman numeral navigation (`I. INGEST MANUSCRIPT`, `II. REACHABILITY AUDIT`, `III. SENTENCE EXPLORER`, `IV. ZOTERO DELIVERABLES`).
+  - Palette: Authentic warm newsprint paper (`#f9f7f1`), aged ink (`#2f2f2f`), faint ink (`#8a8a8a`), hairline rules (`#c4c0b6`), and archival crimson accents (`#8b0000`).
+  - Typography: `Newsreader` for headlines, `Merriweather` for reading body, and `Source Sans 3` for controls.
+  - Colophon footer and archival stamp status badges.
+- **Empirical Verification**: End-to-end verified in live browser session on `http://localhost:8765` by UI Verifier subagent.
