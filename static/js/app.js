@@ -22,6 +22,7 @@ let appState = {
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const btnSample = document.getElementById('btnSample');
+const btnActa2 = document.getElementById('btnActa2');
 const citationFormatSelect = document.getElementById('citationFormatSelect');
 const customFormatInput = document.getElementById('customFormatInput');
 const resultsSection = document.getElementById('resultsSection');
@@ -102,10 +103,30 @@ if (btnSample) {
         type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       });
       await handleFileSelected(file);
-      btnSample.textContent = '📄 Load Sample Radiology Manuscript';
+      btnSample.textContent = '📄 Sample Radiology Paper';
     } catch (err) {
       alert("Error loading sample: " + err.message);
-      btnSample.textContent = '📄 Load Sample Radiology Manuscript';
+      btnSample.textContent = '📄 Sample Radiology Paper';
+    }
+  });
+}
+
+if (btnActa2) {
+  btnActa2.addEventListener('click', async () => {
+    try {
+      btnActa2.textContent = '⏳ Loading ACTA2 Manuscript...';
+      const resp = await fetch('ACTA2_Manuscript_11.14.2026.docx');
+      if (!resp.ok) throw new Error("Could not find ACTA2 manuscript file.");
+      const blob = await resp.blob();
+      const file = new File([blob], "ACTA2_Manuscript_11.14.2026.docx", {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      });
+      if (citationFormatSelect) citationFormatSelect.value = 'sup';
+      await handleFileSelected(file);
+      btnActa2.textContent = '📋 Load ACTA2 Manuscript (43 Refs)';
+    } catch (err) {
+      alert("Error loading ACTA2 manuscript: " + err.message);
+      btnActa2.textContent = '📋 Load ACTA2 Manuscript (43 Refs)';
     }
   });
 }

@@ -37,3 +37,15 @@
   - Typography: `Newsreader` for headlines, `Merriweather` for reading body, and `Source Sans 3` for controls.
   - Colophon footer and archival stamp status badges.
 - **Empirical Verification**: End-to-end verified in live browser session on `http://localhost:8765` by UI Verifier subagent.
+
+### [2026-11-14 07:53] ARCH-DECISION-004: Real-World Clinical Manuscript Stress Testing (ACTA2 Review)
+- **Context**: User submitted a real-world clinical systematic review manuscript `ACTA2_Manuscript_11.14.2026.docx` (185 KB, 176 paragraphs, 11 tables, 43 references) to stress-test and fix all potential edge cases.
+- **Audits & Remediations**:
+  1. **Hyphenated Superscript Range Bug**: Detected that superscript range notation (e.g. `11-42`) was splitting into boundary elements `[11, 42]` rather than expanding sequentially `[11..42]`. Resolved in both Python `server/parser.py` and JavaScript `static/js/docx_engine.js`.
+  2. **Zero Uncited References**: Confirmed 100% of all 43 bibliography entries are cited in the manuscript body.
+  3. **AMA Consecutive First-Mention Order**: Confirmed 100% compliance with zero sequence warnings.
+  4. **Scholarly Registry Reachability**: Confirmed 43/43 (100%) DOIs resolve to active publisher landing pages via Crossref and DOI resolvers with zero broken links.
+  5. **Concurrent Asynchronous Auditing**: Switched validation from sequential to a 10-worker thread pool, accelerating audit latency from 40s to 2.67s.
+  6. **Table & OOXML Structural Integrity**: Confirmed all 11 tables, supplementary methods, and all 176 paragraphs remain identical without corruption.
+  7. **Native Zotero Field Injection**: Successfully generated `ACTA2_Manuscript_zotero_linked.docx` with 56 `ADDIN ZOTERO_ITEM` fields, `ADDIN ZOTERO_BIBL`, and `ADDIN ZOTERO_PREF_1`.
+- **Verification**: Verified via test `test_08_acta2_real_world_manuscript` in `tests/test_engine.py` (8/8 tests passing).

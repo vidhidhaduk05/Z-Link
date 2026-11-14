@@ -112,7 +112,22 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
 
       // 1. Superscript check
       if ((citationFormat === "auto" || citationFormat === "sup") && isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
-        const nums = rText.split(/[,-]/).map(x => parseInt(x, 10)).filter(x => !isNaN(x));
+        const inner = rText.replace(/–/g, '-');
+        const nums = [];
+        inner.split(/\s*,\s*/).forEach(part => {
+          if (part.includes('-')) {
+            const sp = part.split('-');
+            const s0 = parseInt(sp[0], 10);
+            const s1 = parseInt(sp[1], 10);
+            if (!isNaN(s0) && !isNaN(s1)) {
+              for (let k = s0; k <= s1; k++) nums.push(k);
+            }
+          } else {
+            const n = parseInt(part, 10);
+            if (!isNaN(n)) nums.push(n);
+          }
+        });
+
         const prevChar = combinedPrev.slice(-1);
         const lowerPrev = combinedPrev.trim().toLowerCase();
         

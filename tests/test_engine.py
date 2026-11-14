@@ -120,6 +120,47 @@ class TestZoteroLinkEngine(unittest.TestCase):
         paras, sites_paren, refs = parse_paragraphs_list(bracket_paras, citation_format="paren")
         self.assertEqual(len(sites_paren), 0, "Paren mode should not match square bracket citations")
 
+    def test_08_acta2_real_world_manuscript(self):
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript file not present")
+
+        paras, sites, refs = parse_docx_manuscript(doc_path)
+        self.assertEqual(len(refs), 43, "ACTA2 manuscript must have exactly 43 references")
+        self.assertGreaterEqual(len(sites), 30, "Must detect all in-text citation sites")
+
+        all_cited_nums = set()
+        for s in sites:
+            all_cited_nums.update(s.nums)
+        
+        # Verify 100% of all 43 references are cited
+        missing = set(range(1, 44)) - all_cited_nums
+        self.assertEqual(len(missing), 0, f"All 43 references must be cited in text, missing: {missing}")
+
+        # Verify AMA consecutive sequence
+        ref_map, seq_valid, warnings = map_usage_and_sequence(refs, sites)
+        self.assertTrue(seq_valid, f"AMA consecutive sequence must be valid, warnings: {warnings}")
+        self.assertEqual(len(warnings), 0, "Must have zero sequence warnings")
+
+        # Verify RIS generation
+        ris = generate_ris(refs)
+        self.assertEqual(ris.count("ER  -"), 43, "RIS must have 43 complete entries")
+
+        # Verify OOXML Native Zotero Field Injection
+        out_target = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_test_linked.docx"
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_target)
+        self.assertTrue(os.path.exists(out_target))
+
+        out_doc = docx.Document(out_target)
+        xml_all = "".join([p._p.xml for p in out_doc.paragraphs])
+        self.assertIn("ADDIN ZOTERO_ITEM", xml_all)
+        self.assertIn("ADDIN ZOTERO_BIBL", xml_all)
+        self.assertIn("ADDIN ZOTERO_PREF_1", xml_all)
+
+        orig_doc = docx.Document(doc_path)
+        self.assertEqual(len(out_doc.tables), len(orig_doc.tables), "All 11 tables must be preserved")
+        self.assertEqual(len(out_doc.paragraphs), len(orig_doc.paragraphs), "All 176 paragraphs must be preserved")
+
 if __name__ == "__main__":
     unittest.main()
 

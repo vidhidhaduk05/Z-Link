@@ -48,6 +48,13 @@ def serve_sample_doc():
         return FileResponse(sample_path)
     raise HTTPException(status_code=404, detail="Sample manuscript not found.")
 
+@app.get("/ACTA2_Manuscript_11.14.2026.docx")
+def serve_acta2_doc():
+    doc_path = os.path.join(os.path.dirname(__file__), "..", "ACTA2_Manuscript_11.14.2026.docx")
+    if os.path.exists(doc_path):
+        return FileResponse(doc_path)
+    raise HTTPException(status_code=404, detail="ACTA2 manuscript not found.")
+
 JOBS_CACHE: Dict[str, Dict] = {}
 
 @app.get("/api/health")
@@ -82,10 +89,17 @@ async def audit_manuscript(
     else:
         raise HTTPException(status_code=400, detail="Must provide either a .docx file or text_content.")
 
-    # Run validation & reachability on all references
+    # Run validation & reachability concurrently on all references
     verdicts: Dict[int, ValidationVerdict] = {}
-    for ref in references:
-        verdicts[ref.ref_num] = validate_single_reference(ref)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ref = {executor.submit(validate_single_reference, ref): ref for ref in references}
+        for future in as_completed(future_to_ref):
+            ref = future_to_ref[future]
+            try:
+                verdicts[ref.ref_num] = future.result()
+            except Exception as e:
+                verdicts[ref.ref_num] = ValidationVerdict(ref_num=ref.ref_num, status="error", notes=[str(e)])
 
     # Map usage and AMA order
     mappings, seq_valid, warnings = map_usage_and_sequence(references, sites)

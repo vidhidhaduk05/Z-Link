@@ -171,7 +171,16 @@ def parse_paragraphs_list(
                 r_txt = r.text or ""
                 # 1. Superscript check
                 if citation_format in ("auto", "sup") and is_superscript(r) and SUP_CIT.match(r_txt):
-                    nums = [int(x) for x in re.split(r'[,-]', r_txt) if x.isdigit()]
+                    inner = r_txt.replace('–', '-')
+                    nums = []
+                    for part in re.split(r'\s*,\s*', inner):
+                        if '-' in part:
+                            sp = part.split('-')
+                            if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
+                                nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                        elif part.strip().isdigit():
+                            nums.append(int(part))
+
                     prev_char = combined_prev[-1:] if combined_prev else ""
                     # exclude affiliation markers like "MD1" or trailing digits
                     if not prev_char or prev_char.isdigit():
