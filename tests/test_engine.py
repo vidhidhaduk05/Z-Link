@@ -71,5 +71,29 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIn("ADDIN ZOTERO_BIBL", xml_str, "Output must contain ZOTERO_BIBL field")
         self.assertIn("ADDIN ZOTERO_PREF_1", xml_str, "Output must contain ZOTERO_PREF_1 preferences")
 
+    def test_06_citation_vs_number_discrimination(self):
+        from server.parser import parse_paragraphs_list
+        test_paras = [
+            "INTRODUCTION",
+            "Deep learning has improved image diagnosis (1, 2).",
+            "We evaluated stage (1) tumors across 45 patients with mean volume of 15 cm3.",
+            "Results demonstrated statistical significance (p < 0.05, 95% CI: 1.2-3.4) with R2 of 0.88.",
+            "Earlier findings supported this hypothesis (3).",
+            "REFERENCES",
+            "1. First Author. Title 1. Journal. 2020. doi: 10.1038/s41586-020-2649-2",
+            "2. Second Author. Title 2. Journal. 2021. doi: 10.1056/NEJMoa2002032",
+            "3. Third Author. Title 3. Journal. 2022. doi: 10.1038/nature12373"
+        ]
+        paras, sites, refs = parse_paragraphs_list(test_paras)
+        cited_nums = []
+        for s in sites:
+            cited_nums.extend(s.nums)
+        
+        # Should detect citations (1, 2) and (3)
+        self.assertEqual(cited_nums, [1, 2, 3])
+        # Verify that "stage (1)", "45 patients", "15 cm3", "p < 0.05", "R2" were NEVER matched as citations
+        self.assertEqual(len(sites), 2, "Should only find the 2 actual bibliographic citation sites")
+
 if __name__ == "__main__":
     unittest.main()
+

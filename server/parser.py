@@ -13,7 +13,10 @@ REF_START = re.compile(r'^(\d{1,3})\.\s+(.*)$')
 REF_HEADER = re.compile(r'^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$', re.I)
 BODY_START = re.compile(r'^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|Introduction|BACKGROUND|Key Results)\s*$', re.I)
 
-EXPONENT_PREV = set('RrχτIβ')
+EXPONENT_PREV_CHARS = set('RrχτIβtfzp')
+EXPONENT_PREV_WORDS = ('cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th')
+CLASSIFICATION_NOUNS = re.compile(r'\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$', re.I)
+ENUMERATED_LIST_START = re.compile(r'^\s*\((?:\d{1,2})\)\s+[A-Z]')
 DOI_RE = re.compile(r'(?:https?://(?:dx\.)?doi\.org/|doi:\s*)(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)', re.I)
 FALLBACK_DOI_RE = re.compile(r'\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b')
 PMID_RE = re.compile(r'(?:PMID:\s*|pmid:\s*)(\d{6,9})', re.I)
@@ -163,12 +166,15 @@ def parse_paragraphs_list(
                 if is_superscript(r) and SUP_CIT.match(r_txt):
                     nums = [int(x) for x in re.split(r'[,-]', r_txt) if x.isdigit()]
                     prev_char = combined_prev[-1:] if combined_prev else ""
-                    # exclude affiliation markers like "MD1"
+                    # exclude affiliation markers like "MD1" or trailing digits
                     if not prev_char or prev_char.isdigit():
                         combined_prev += r_txt
                         continue
-                    # exclude statistical exponents
-                    if prev_char in EXPONENT_PREV and r_txt in ('2', '3'):
+                    # exclude statistical exponents and physical units
+                    if prev_char in EXPONENT_PREV_CHARS and r_txt in ('2', '3', '4'):
+                        combined_prev += r_txt
+                        continue
+                    if any(combined_prev.rstrip().lower().endswith(w) for w in EXPONENT_PREV_WORDS) and r_txt in ('2', '3', '4'):
                         combined_prev += r_txt
                         continue
                     if nums and (n_refs == 999 or max(nums) <= n_refs):
@@ -188,6 +194,15 @@ def parse_paragraphs_list(
                         ))
                 elif PAREN_CIT.search(r_txt):
                     for m in PAREN_CIT.finditer(r_txt):
+                        # Guard against classification nouns e.g. "stage (1)", "Table (2)"
+                        context_prior = (combined_prev + r_txt[:m.start()]).rstrip()
+                        if CLASSIFICATION_NOUNS.search(context_prior):
+                            continue
+                        # Guard against enumerated lists e.g. "(1) We analyzed..."
+                        sentence_start_check = r_txt[m.start():m.end() + 20]
+                        if ENUMERATED_LIST_START.match(sentence_start_check) and not context_prior:
+                            continue
+
                         inner = m.group(1).replace('–', '-')
                         nums = []
                         for part in re.split(r'\s*,\s*', inner):
@@ -215,6 +230,15 @@ def parse_paragraphs_list(
         else:
             # Plain text parsing for parentheticals
             for m in PAREN_CIT.finditer(p_text):
+                # Guard against classification nouns e.g. "stage (1)", "Table (2)"
+                context_prior = p_text[:m.start()].rstrip()
+                if CLASSIFICATION_NOUNS.search(context_prior):
+                    continue
+                # Guard against enumerated lists e.g. "(1) We analyzed..."
+                trailing = p_text[m.start():m.end() + 20]
+                if ENUMERATED_LIST_START.match(trailing) and not context_prior:
+                    continue
+
                 inner = m.group(1).replace('–', '-')
                 nums = []
                 for part in re.split(r'\s*,\s*', inner):
@@ -239,3 +263,4 @@ def parse_paragraphs_list(
                     ))
 
     return para_texts, sites, references
+

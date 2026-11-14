@@ -17,3 +17,14 @@
   1. Client-Side JavaScript Engine (`docx_engine.js` using JSZip) for 100% serverless, zero-cost GitHub Pages static deployment.
   2. Python FastAPI Backend Engine (`server/`) for local CLI, automated test suites, and direct local Zotero desktop API library injection.
 - **Guard**: In-browser engine must produce byte-level compatible XML structures with Python `python-docx` linker.
+
+
+### [2026-11-14 06:44] ARCH-DECISION-002: High-Precision Citation vs. Text Number Discrimination
+- **Context**: The engine must never confuse plain numbers (e.g. `stage (1)`, `p < 0.05`, `95% CI`, `15 cm3`, `R2`) with bibliographic citations.
+- **Decision**: Added multi-layer discrimination guards across both Python backend and JavaScript client engines:
+  1. Upper-bound range gating: Numbers exceeding bibliography size ($N$) are rejected (e.g. years `(2020)` or sample sizes `(150)`).
+  2. Classification noun lookbehind: Excludes numbers preceded by `stage`, `case`, `grade`, `type`, `group`, `cohort`, `sample`, `patient`, `Table`, `Figure`.
+  3. Enumerated itemized list guards: Excludes `(1) Capitalized text...` beginning a sentence.
+  4. Exponent and unit lookbehinds: Excludes superscripts preceded by statistical characters ($R^2$, $\chi^2$, $\tau^2$, $I^2$, $\beta$) or physical units ($cm^3$, $mm^2$, $m^2$, $kg$).
+  5. Affiliation lookbehind: Excludes author superscripts preceded by characters like `MD1`, `PhD2`.
+- **Verification**: Verified via test `test_06_citation_vs_number_discrimination` in `tests/test_engine.py` (100% pass rate).

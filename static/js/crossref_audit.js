@@ -117,3 +117,4 @@ async function queryOpenAlexFallback(cleanDoi) {
     notes: ["Unable to verify DOI through public scholarly registries."]
   };
 }
+

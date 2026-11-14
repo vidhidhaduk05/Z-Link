@@ -44,3 +44,4 @@ def generate_ris(references: List[ReferenceEntry], verdicts: Dict[int, Validatio
         lines.append("")
 
     return "\n".join(lines)
+

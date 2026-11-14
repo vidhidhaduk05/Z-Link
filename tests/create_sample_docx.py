@@ -56,3 +56,4 @@ def create_sample_manuscript(filename: str = "sample_radiology_manuscript.docx")
 
 if __name__ == "__main__":
     create_sample_manuscript()
+

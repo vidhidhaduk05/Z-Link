@@ -217,3 +217,4 @@ def link_docx_manuscript(
     target = output_target or BytesIO()
     doc.save(target)
     return target
+

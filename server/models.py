@@ -74,3 +74,4 @@ class AuditSummary(BaseModel):
     references: List[ReferenceEntry]
     verdicts: Dict[int, ValidationVerdict]
     mappings: Dict[int, UsageMapping]
+

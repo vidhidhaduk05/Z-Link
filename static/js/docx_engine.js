@@ -13,6 +13,11 @@ const REF_START_REGEX = /^(\d{1,3})\.\s+(.*)$/;
 const REF_HEADER_REGEX = /^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$/i;
 const BODY_START_REGEX = /^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|BACKGROUND|Key Results)\s*$/i;
 
+const EXPONENT_CHARS = new Set(['R', 'r', 'χ', 'τ', 'I', 'β', 't', 'f', 'z', 'p']);
+const EXPONENT_WORDS = ['cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th'];
+const CLASSIFICATION_NOUNS = /\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$/i;
+const ENUMERATED_LIST_START = /^\s*\((?:\d{1,2})\)\s+[A-Z]/;
+
 export async function parseDocxFile(fileOrBuffer) {
   if (!window.JSZip) {
     throw new Error("JSZip library not loaded.");
@@ -107,7 +112,13 @@ export async function parseDocxFile(fileOrBuffer) {
       if (isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
         const nums = rText.split(/[,-]/).map(x => parseInt(x, 10)).filter(x => !isNaN(x));
         const prevChar = combinedPrev.slice(-1);
-        if (prevChar && !/\d/.test(prevChar) && !/[RrχτIβ]/.test(prevChar)) {
+        const lowerPrev = combinedPrev.trim().toLowerCase();
+        
+        // Exclude affiliations, exponents, and physical units
+        const isExpWord = EXPONENT_WORDS.some(w => lowerPrev.endsWith(w));
+        const isExpChar = EXPONENT_CHARS.has(prevChar) && ['2', '3', '4'].includes(rText);
+
+        if (prevChar && !/\d/.test(prevChar) && !isExpChar && !isExpWord) {
           if (Math.max(...nums) <= maxRefNum) {
             sites.push({
               paragraph_idx: pi,
@@ -125,6 +136,17 @@ export async function parseDocxFile(fileOrBuffer) {
         let match;
         const parenRe = new RegExp(PAREN_REGEX);
         while ((match = parenRe.exec(rText)) !== null) {
+          // Check classification nouns
+          const contextPrior = (combinedPrev + rText.slice(0, match.index)).trim();
+          if (CLASSIFICATION_NOUNS.test(contextPrior)) {
+            continue;
+          }
+          // Check enumerated list start
+          const trailing = rText.slice(match.index, match.index + match[0].length + 20);
+          if (ENUMERATED_LIST_START.test(trailing) && !contextPrior) {
+            continue;
+          }
+
           const inner = match[1].replace(/–/g, '-');
           const nums = [];
           inner.split(/\s*,\s*/).forEach(part => {
@@ -336,3 +358,4 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}) {
 
   return outBlob;
 }
+

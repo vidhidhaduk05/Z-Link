@@ -196,3 +196,4 @@ def map_usage_and_sequence(
         )
 
     return ref_map, consecutive_valid, order_warnings
+

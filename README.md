@@ -95,3 +95,4 @@ The interface strictly adheres to the 7-color academic editorial standard:
 ## 📄 License
 
 MIT License. Designed for reproducible scholarly communication.
+
