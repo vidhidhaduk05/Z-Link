@@ -512,6 +512,18 @@ main.app-container {
   border-color: var(--status-reachable);
 }
 
+.badge-reach.bot-protected {
+  background-color: #fef3c7;
+  color: #92400e;
+  border-color: #d97706;
+}
+
+.badge-reach.registry {
+  background-color: #f3eaf1;
+  color: #814d75;
+  border-color: #814d75;
+}
+
 .badge-reach.broken {
   background-color: var(--status-broken-bg);
   color: var(--status-broken);
@@ -522,6 +534,28 @@ main.app-container {
   background-color: var(--status-muted-bg);
   color: var(--status-muted);
   border-color: var(--status-muted);
+}
+
+.btn-open-ext {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 0.15rem 0.45rem;
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-decoration: none;
+  background: var(--color-paper-dark);
+  color: var(--color-ink);
+  border: 1px solid var(--color-rule-light);
+  transition: all 0.15s ease;
+}
+
+.btn-open-ext:hover {
+  background: var(--color-ink);
+  color: var(--color-paper);
+  border-color: var(--color-ink);
 }
 
 /* ==========================================================================

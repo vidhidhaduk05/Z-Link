@@ -135,14 +135,19 @@
           <div class="metric-sub">Extracted references</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Reachable DOIs</div>
+          <div class="metric-label">Live Verified</div>
           <div class="metric-value" id="metricReachable" style="color: var(--status-reachable);">0</div>
-          <div class="metric-sub">HTTP 200 via Crossref / Registry</div>
+          <div class="metric-sub">HTTP 200 via registry landing</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Broken / Invalid DOIs</div>
+          <div class="metric-label">Bot Check / Paywall</div>
+          <div class="metric-value" id="metricBotGated" style="color: #b45309;">0</div>
+          <div class="metric-sub">Registered DOI; publisher WAF/paywall</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Dead Links (404)</div>
           <div class="metric-value" id="metricBroken" style="color: var(--status-broken);">0</div>
-          <div class="metric-sub">HTTP 404 or unresolvable</div>
+          <div class="metric-sub">Unregistered or dead DOI</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">AMA Numbering Sequence</div>

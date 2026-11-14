@@ -104,7 +104,9 @@ async def audit_manuscript(
     # Map usage and AMA order
     mappings, seq_valid, warnings = map_usage_and_sequence(references, sites)
 
-    total_reachable = sum(1 for v in verdicts.values() if v.is_reachable)
+    total_verified_live = sum(1 for v in verdicts.values() if v.status == "verified")
+    total_bot_protected = sum(1 for v in verdicts.values() if v.status == "bot_protected")
+    total_reachable = total_verified_live + total_bot_protected
     total_broken = sum(1 for v in verdicts.values() if v.status == "unreachable")
     total_missing = sum(1 for v in verdicts.values() if v.status == "missing_doi")
 
@@ -113,6 +115,8 @@ async def audit_manuscript(
         total_citations=len(sites),
         total_references=len(references),
         total_reachable=total_reachable,
+        total_verified_live=total_verified_live,
+        total_bot_protected=total_bot_protected,
         total_broken=total_broken,
         total_missing_doi=total_missing,
         consecutive_order_valid=seq_valid,

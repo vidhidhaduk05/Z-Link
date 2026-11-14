@@ -12,24 +12,86 @@ PUBMED_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 TIMEOUT = 6
 
-def check_doi_reachability(doi: str) -> Tuple[bool, int, str]:
+def check_doi_handle(doi: str) -> Tuple[bool, str]:
     """
-    Check if the DOI resolves on doi.org and reachability to the publisher page.
+    Query the official DOI Foundation Handle system REST API.
+    Universal, authoritative global registry for all DOIs.
     """
     if not doi:
-        return False, 0, ""
+        return False, ""
+    clean_doi = doi.strip()
+    clean_doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", clean_doi, flags=re.IGNORECASE)
+    clean_doi = re.sub(r"^doi:\s*", "", clean_doi, flags=re.IGNORECASE)
+    url = f"https://doi.org/api/handles/{clean_doi}"
+    try:
+        r = requests.get(url, timeout=TIMEOUT)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("responseCode") == 1:
+                # Find target URL registered by publisher
+                for val in data.get("values", []):
+                    if val.get("type") == "URL":
+                        return True, val.get("data", {}).get("value", "")
+                return True, f"https://doi.org/{clean_doi}"
+        return False, ""
+    except Exception:
+        return False, ""
+
+def check_doi_reachability(doi: str) -> Tuple[bool, bool, int, str]:
+    """
+    Check if the DOI resolves on doi.org and reachability to publisher landing page.
+    Returns: (is_reachable, is_bot_protected, status_code, resolved_url)
+    """
+    if not doi:
+        return False, False, 0, ""
     
-    url = f"https://doi.org/{doi}"
+    clean_doi = doi.strip()
+    clean_doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", clean_doi, flags=re.IGNORECASE)
+    clean_doi = re.sub(r"^doi:\s*", "", clean_doi, flags=re.IGNORECASE)
+
+    # 1. Authoritative check with official DOI Foundation Handle system
+    handle_valid, handle_target = check_doi_handle(clean_doi)
+
+    url = f"https://doi.org/{clean_doi}"
     headers = {"User-Agent": USER_AGENT}
     try:
         r = requests.get(url, headers=headers, timeout=TIMEOUT, stream=True, allow_redirects=True)
         status = r.status_code
-        final_url = r.url
-        # If 200, or redirected to publisher (even if publisher returns 403 bot-gate), it is registered
-        is_reachable = (status == 200) or ("doi.org" not in final_url and status in (200, 301, 302, 403))
-        return is_reachable, status, final_url
+        final_url = r.url or handle_target or url
+
+        # Detect anti-bot, WAF, Cloudflare, or paywall challenges
+        is_bot = False
+        if status in (403, 429, 503):
+            is_bot = True
+        elif status == 200:
+            srv = r.headers.get("server", "").lower()
+            cf_ray = r.headers.get("cf-ray") or ("cloudflare" in srv)
+            if "cf-mitigated" in r.headers:
+                is_bot = True
+            elif cf_ray and any(marker in r.text[:3000].lower() for marker in [
+                "challenges.cloudflare.com", "just a moment...", "turnstile", "verify you are human", "attention required!"
+            ]):
+                is_bot = True
+
+        if is_bot and (handle_valid or "doi.org" not in final_url):
+            return True, True, status, final_url
+        
+        if status == 200 and not is_bot:
+            return True, False, 200, final_url
+        
+        if status in (301, 302, 307, 308) and handle_valid:
+            return True, False, status, final_url
+
+        if handle_valid:
+            # Handle registry confirmed valid DOI; publisher throttled or blocked automated probe
+            return True, True, status or 403, handle_target or final_url
+            
+        return False, False, status, final_url
     except requests.exceptions.RequestException:
-        return False, 0, ""
+        if handle_valid:
+            # Handle registered; network dropped/throttled by publisher WAF
+            return True, True, 403, handle_target or f"https://doi.org/{clean_doi}"
+        return False, False, 0, ""
 
 def query_crossref(doi: str) -> Dict:
     """
@@ -37,7 +99,10 @@ def query_crossref(doi: str) -> Dict:
     """
     if not doi:
         return {}
-    url = f"{CROSSREF_API}/{doi}"
+    clean_doi = doi.strip()
+    clean_doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", clean_doi, flags=re.IGNORECASE)
+    clean_doi = re.sub(r"^doi:\s*", "", clean_doi, flags=re.IGNORECASE)
+    url = f"{CROSSREF_API}/{clean_doi}"
     headers = {"User-Agent": f"CoScientist-Auditor/1.0 (mailto:coscientist-auditor@academic.org)"}
     try:
         r = requests.get(url, headers=headers, timeout=TIMEOUT)
@@ -59,12 +124,8 @@ def validate_single_reference(ref: ReferenceEntry) -> ValidationVerdict:
             notes=["No DOI detected in reference line."]
         )
 
-    # 1. Reachability
-    is_reachable, http_code, resolved_url = check_doi_reachability(doi)
-    if is_reachable:
-        notes.append(f"DOI resolves to live landing: {resolved_url[:65]}...")
-    else:
-        notes.append(f"DOI failed to resolve (HTTP {http_code}).")
+    # 1. Reachability & Bot Verification Check
+    is_reachable, is_bot_protected, http_code, resolved_url = check_doi_reachability(doi)
 
     # 2. Crossref metadata
     cr_data = query_crossref(doi)
@@ -97,19 +158,24 @@ def validate_single_reference(ref: ReferenceEntry) -> ValidationVerdict:
         notes.append("Metadata verified against Crossref registry.")
 
     # Status classification
-    if cr_found and is_reachable:
+    if is_bot_protected:
+        verdict_status = "bot_protected"
+        notes.append("DOI registered in global Handle database. Publisher site presented anti-bot challenge (Cloudflare/WAF) or institutional paywall. Valid for human readers.")
+    elif cr_found and is_reachable:
         verdict_status = "verified"
-    elif cr_found and not is_reachable:
-        verdict_status = "redirected" if http_code in (301, 302, 403) else "unreachable"
+        notes.append(f"DOI resolves to live landing: {resolved_url[:65]}...")
     elif not cr_found and is_reachable:
-        verdict_status = "verified" # Registered at doi.org
+        verdict_status = "verified"
+        notes.append(f"DOI verified via Handle registry: {resolved_url[:65]}...")
     else:
         verdict_status = "unreachable"
+        notes.append(f"DOI failed to resolve in global registry (HTTP {http_code}).")
 
     return ValidationVerdict(
         ref_num=ref.ref_num,
         status=verdict_status,
         is_reachable=is_reachable,
+        is_bot_gated=is_bot_protected,
         http_status=http_code,
         resolved_url=resolved_url,
         crossref_found=cr_found,

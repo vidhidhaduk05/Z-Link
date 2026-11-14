@@ -12,6 +12,7 @@ from server.parser import parse_docx_manuscript
 from server.validator import validate_single_reference, map_usage_and_sequence
 from server.ris_generator import generate_ris
 from server.linker import link_docx_manuscript
+from server.models import ReferenceEntry
 
 class TestZoteroLinkEngine(unittest.TestCase):
     docx_file = "sample_radiology_manuscript.docx"
@@ -160,6 +161,28 @@ class TestZoteroLinkEngine(unittest.TestCase):
         orig_doc = docx.Document(doc_path)
         self.assertEqual(len(out_doc.tables), len(orig_doc.tables), "All 11 tables must be preserved")
         self.assertEqual(len(out_doc.paragraphs), len(orig_doc.paragraphs), "All 176 paragraphs must be preserved")
+
+    def test_09_bot_verification_and_handle_discrimination(self):
+        # 1. Test bot-protected real DOI (e.g. Oxford Academic / Brain 10.1093/brain/aws172)
+        ref_bot = ReferenceEntry(
+            ref_num=1,
+            raw_text="1. Author. Brain paper. 2012. doi: 10.1093/brain/aws172",
+            doi="10.1093/brain/aws172"
+        )
+        verdict_bot = validate_single_reference(ref_bot)
+        self.assertIn(verdict_bot.status, ["bot_protected", "verified"])
+        self.assertTrue(verdict_bot.is_reachable)
+        self.assertNotEqual(verdict_bot.status, "unreachable", "Bot-protected DOI must not be classified as unreachable")
+
+        # 2. Test completely fake unresolvable DOI
+        ref_fake = ReferenceEntry(
+            ref_num=2,
+            raw_text="2. Fake Author. Nonexistent Paper. 2024. doi: 10.1016/fake.broken.doi.99999",
+            doi="10.1016/fake.broken.doi.99999"
+        )
+        verdict_fake = validate_single_reference(ref_fake)
+        self.assertEqual(verdict_fake.status, "unreachable", "Nonexistent DOI must be classified as unreachable")
+        self.assertFalse(verdict_fake.is_reachable)
 
 if __name__ == "__main__":
     unittest.main()

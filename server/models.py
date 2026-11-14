@@ -31,8 +31,9 @@ class ReferenceEntry(BaseModel):
 
 class ValidationVerdict(BaseModel):
     ref_num: int
-    status: str = Field("unverified", description="'verified', 'redirected', 'unreachable', 'missing_doi', 'error'")
+    status: str = Field("unverified", description="'verified', 'bot_protected', 'handle_confirmed', 'unreachable', 'missing_doi', 'error'")
     is_reachable: bool = False
+    is_bot_gated: bool = False
     http_status: Optional[int] = None
     resolved_url: str = ""
     crossref_found: bool = False
@@ -66,6 +67,8 @@ class AuditSummary(BaseModel):
     total_citations: int
     total_references: int
     total_reachable: int
+    total_verified_live: int = 0
+    total_bot_protected: int = 0
     total_broken: int
     total_missing_doi: int
     consecutive_order_valid: bool
