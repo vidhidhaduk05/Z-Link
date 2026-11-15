@@ -48,6 +48,7 @@ const steps = {
 };
 
 // Deliverable buttons
+const btnDownloadTrackedDocx = document.getElementById('btnDownloadTrackedDocx');
 const btnDownloadDocx = document.getElementById('btnDownloadDocx');
 const btnDownloadRis = document.getElementById('btnDownloadRis');
 const btnDownloadReport = document.getElementById('btnDownloadReport');
@@ -534,17 +535,33 @@ function highlightSentenceInManuscript(refNum) {
 
 // ---------------- Deliverables Center ----------------
 
+if (btnDownloadTrackedDocx) {
+  btnDownloadTrackedDocx.addEventListener('click', async () => {
+    if (!appState.parsedData) return;
+    try {
+      btnDownloadTrackedDocx.textContent = '⏳ Generating Tracked Changes...';
+      const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, true, "Co-Scientist");
+      const baseName = appState.fileName.replace(/\.docx$/i, '');
+      downloadBlob(blob, `${baseName}_tracked_changes.docx`);
+      btnDownloadTrackedDocx.textContent = '📝 Download Tracked Changes (.docx)';
+    } catch (err) {
+      alert("Error generating Tracked Changes document: " + err.message);
+      btnDownloadTrackedDocx.textContent = '📝 Download Tracked Changes (.docx)';
+    }
+  });
+}
+
 btnDownloadDocx.addEventListener('click', async () => {
   if (!appState.parsedData) return;
   try {
     btnDownloadDocx.textContent = '⏳ Injecting & Re-ordering...';
-    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true);
+    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, false);
     const baseName = appState.fileName.replace(/\.docx$/i, '');
     downloadBlob(blob, `${baseName}_zotero_linked.docx`);
-    btnDownloadDocx.textContent = '📥 Download Zotero-Linked (.docx)';
+    btnDownloadDocx.textContent = '📄 Download Clean Linked (.docx)';
   } catch (err) {
     alert("Error generating linked Word document: " + err.message);
-    btnDownloadDocx.textContent = '📥 Download Zotero-Linked (.docx)';
+    btnDownloadDocx.textContent = '📄 Download Clean Linked (.docx)';
   }
 });
 

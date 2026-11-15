@@ -6,6 +6,7 @@ import sys
 import unittest
 import docx
 import re
+from io import BytesIO
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -553,6 +554,184 @@ class TestZoteroLinkEngine(unittest.TestCase):
         # Every reference number maps to itself: mapping[n] == n for all n
         for n in range(1, 44):
             self.assertEqual(mapping[n], n, f"Reference {n} must map to itself in ACTA2")
+
+    def test_25_track_changes_in_text_citations(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from docx.oxml.ns import qn
+
+        doc = docx.Document()
+        doc.add_paragraph("Early breakthrough was discovered by pioneer [3].")
+        doc.add_paragraph("Later confirmed by [1].")
+        doc.add_paragraph("References")
+        doc.add_paragraph("1. Alpha A. First paper. J Mol Biol. 2010;10:1-5.")
+        doc.add_paragraph("2. Beta B. Second paper. J Cell Sci. 2011;11:2-6.")
+        doc.add_paragraph("3. Gamma C. Third paper. Nature. 2012;12:3-7.")
+
+        in_stream = BytesIO()
+        doc.save(in_stream)
+        in_stream.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_stream, citation_format="bracket")
+        in_stream.seek(0)
+        out_stream = BytesIO()
+        link_docx_manuscript(
+            in_stream, sites, refs,
+            output_target=out_stream,
+            renumber_ama=True,
+            track_changes=True,
+            author="Co-Scientist"
+        )
+        out_stream.seek(0)
+
+        out_doc = docx.Document(out_stream)
+        p0 = out_doc.paragraphs[0]
+        # Inspect p0 XML for w:del and w:ins
+        del_els = p0._p.findall(qn('w:del'))
+        ins_els = p0._p.findall(qn('w:ins'))
+        self.assertGreaterEqual(len(del_els), 1, "Must contain <w:del> for old citation [3]")
+        self.assertGreaterEqual(len(ins_els), 1, "Must contain <w:ins> for new citation 1")
+
+        # Verify author attribute
+        self.assertEqual(del_els[0].get(qn('w:author')), "Co-Scientist")
+        self.assertEqual(ins_els[0].get(qn('w:author')), "Co-Scientist")
+
+        # Verify delText contains '[3]'
+        del_text_el = del_els[0].find(f".//{qn('w:delText')}")
+        self.assertIsNotNone(del_text_el)
+        self.assertEqual(del_text_el.text, "[3]")
+
+        # Verify ins text contains '1' with superscript formatting
+        ins_text_el = ins_els[0].find(f".//{qn('w:t')}")
+        self.assertIsNotNone(ins_text_el)
+        self.assertEqual(ins_text_el.text, "1")
+        rPr = ins_els[0].find(f".//{qn('w:rPr')}")
+        self.assertIsNotNone(rPr)
+        va = rPr.find(qn('w:vertAlign'))
+        self.assertIsNotNone(va)
+        self.assertEqual(va.get(qn('w:val')), "superscript")
+
+    def test_26_track_changes_in_bibliography_and_doi(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from server.models import ValidationVerdict
+        from docx.oxml.ns import qn
+
+        doc = docx.Document()
+        doc.add_paragraph("Early breakthrough pioneer [3].")
+        doc.add_paragraph("References")
+        doc.add_paragraph("1. Alpha A. First paper. J Mol Biol. 2010.")
+        doc.add_paragraph("2. Beta B. Second paper. J Cell Sci. 2011.")
+        doc.add_paragraph("3. Gamma C. Third paper. Nature. 2012.")
+
+        in_stream = BytesIO()
+        doc.save(in_stream)
+        in_stream.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_stream, citation_format="bracket")
+        verdicts = {
+            3: ValidationVerdict(
+                ref_num=3, is_reachable=True, is_recovered_doi=True,
+                http_status=200, resolved_url="https://doi.org/10.1000/recovered3",
+                recovered_doi="10.1000/recovered3", status="recovered"
+            )
+        }
+
+        in_stream.seek(0)
+        out_stream = BytesIO()
+        link_docx_manuscript(
+            in_stream, sites, refs,
+            verdicts=verdicts,
+            output_target=out_stream,
+            renumber_ama=True,
+            track_changes=True,
+            author="Co-Scientist"
+        )
+        out_stream.seek(0)
+
+        out_doc = docx.Document(out_stream)
+        # Bibliography starts after paragraph 1
+        bib_paras = [p for p in out_doc.paragraphs if "Gamma C" in p.text]
+        self.assertEqual(len(bib_paras), 1)
+        gamma_p = bib_paras[0]
+
+        # Verify tracked deletion of old prefix '3.'
+        del_els = gamma_p._p.findall(qn('w:del'))
+        self.assertGreaterEqual(len(del_els), 1)
+        del_prefix = del_els[0].find(f".//{qn('w:delText')}")
+        self.assertIsNotNone(del_prefix)
+        self.assertEqual(del_prefix.text, "3.")
+
+        # Verify tracked insertion of new prefix '1.'
+        ins_els = gamma_p._p.findall(qn('w:ins'))
+        self.assertGreaterEqual(len(ins_els), 2, "Must contain prefix ins and recovered DOI ins")
+        ins_prefix = ins_els[0].find(f".//{qn('w:t')}")
+        self.assertIsNotNone(ins_prefix)
+        self.assertEqual(ins_prefix.text, "1.")
+
+        # Verify tracked insertion of recovered DOI
+        ins_doi = ins_els[1].find(f".//{qn('w:t')}")
+        self.assertIsNotNone(ins_doi)
+        self.assertIn("10.1000/recovered3", ins_doi.text)
+
+    def test_27_track_revisions_setting_flag(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from docx.oxml.ns import qn
+
+        doc = docx.Document()
+        doc.add_paragraph("Early text [1].")
+        doc.add_paragraph("References")
+        doc.add_paragraph("1. Alpha A. Paper. 2010.")
+
+        in_stream = BytesIO()
+        doc.save(in_stream)
+
+        in_stream.seek(0)
+        paras, sites, refs = parse_docx_manuscript(in_stream, citation_format="bracket")
+
+        # Tracked mode -> must set trackRevisions
+        in_stream.seek(0)
+        out_tracked = BytesIO()
+        link_docx_manuscript(in_stream, sites, refs, output_target=out_tracked, track_changes=True)
+        out_tracked.seek(0)
+        doc_tracked = docx.Document(out_tracked)
+        self.assertIsNotNone(doc_tracked.settings._element.find(qn('w:trackRevisions')))
+
+        # Clean mode -> must not set trackRevisions
+        in_stream.seek(0)
+        out_clean = BytesIO()
+        link_docx_manuscript(in_stream, sites, refs, output_target=out_clean, track_changes=False)
+        out_clean.seek(0)
+        doc_clean = docx.Document(out_clean)
+        self.assertIsNone(doc_clean.settings._element.find(qn('w:trackRevisions')))
+
+    def test_28_clean_vs_tracked_parity(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from docx.oxml.ns import qn
+
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript not present")
+
+        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+
+        # Clean run
+        out_clean = BytesIO()
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_clean, track_changes=False)
+        out_clean.seek(0)
+        doc_clean = docx.Document(out_clean)
+        clean_dels = sum(len(p._p.findall(qn('w:del'))) for p in doc_clean.paragraphs)
+        self.assertEqual(clean_dels, 0, "Clean manuscript must have 0 deletions")
+
+        # Tracked run
+        out_tracked = BytesIO()
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_tracked, track_changes=True)
+        out_tracked.seek(0)
+        doc_tracked = docx.Document(out_tracked)
+        self.assertIsNotNone(doc_tracked.settings._element.find(qn('w:trackRevisions')))
+        self.assertEqual(len(doc_clean.paragraphs), len(doc_tracked.paragraphs))
 
 if __name__ == "__main__":
     unittest.main()

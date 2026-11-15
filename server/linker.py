@@ -6,6 +6,7 @@ import json
 import random
 import re
 import string
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import List, Dict, Optional, Union, Tuple
 import docx
@@ -16,6 +17,72 @@ from server.models import CitationSite, ReferenceEntry, ValidationVerdict
 DEFAULT_STYLE = "http://www.zotero.org/styles/american-medical-association"
 DEFAULT_STYLE_NAME = "American Medical Association 11th edition"
 CSL_CITATION_SCHEMA = "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
+
+class RevisionTracker:
+    """Manages unique revision IDs and author attribution for Word OpenXML Track Changes."""
+    def __init__(self, author: str = "Co-Scientist", date_str: Optional[str] = None):
+        self.author = author
+        self.date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._current_id = 1
+
+    def next_id(self) -> str:
+        res = str(self._current_id)
+        self._current_id += 1
+        return res
+
+def make_del_element(text: str, rev_id: str, author: str = "Co-Scientist", date_str: Optional[str] = None, is_superscript: bool = False, model_run=None):
+    """Creates a native OpenXML <w:del> element with <w:delText>."""
+    del_el = etree.Element(qn('w:del'))
+    del_el.set(qn('w:id'), rev_id)
+    del_el.set(qn('w:author'), author)
+    del_el.set(qn('w:date'), date_str or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    r = copy.deepcopy(model_run._r) if model_run is not None else etree.Element(qn('w:r'))
+    for t in r.findall(qn('w:t')):
+        r.remove(t)
+    for dt in r.findall(qn('w:delText')):
+        r.remove(dt)
+
+    rPr = r.find(qn('w:rPr'))
+    if is_superscript:
+        if rPr is None:
+            rPr = etree.SubElement(r, qn('w:rPr'))
+        for va in rPr.findall(qn('w:vertAlign')):
+            rPr.remove(va)
+        va = etree.SubElement(rPr, qn('w:vertAlign'))
+        va.set(qn('w:val'), 'superscript')
+
+    dt = etree.SubElement(r, qn('w:delText'))
+    dt.set(qn('xml:space'), 'preserve')
+    dt.text = text
+    del_el.append(r)
+    return del_el
+
+def make_ins_element(text: str, rev_id: str, author: str = "Co-Scientist", date_str: Optional[str] = None, is_superscript: bool = False, model_run=None):
+    """Creates a native OpenXML <w:ins> element with <w:t>."""
+    ins_el = etree.Element(qn('w:ins'))
+    ins_el.set(qn('w:id'), rev_id)
+    ins_el.set(qn('w:author'), author)
+    ins_el.set(qn('w:date'), date_str or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    r = copy.deepcopy(model_run._r) if model_run is not None else etree.Element(qn('w:r'))
+    for t in r.findall(qn('w:t')):
+        r.remove(t)
+
+    rPr = r.find(qn('w:rPr'))
+    if is_superscript:
+        if rPr is None:
+            rPr = etree.SubElement(r, qn('w:rPr'))
+        for va in rPr.findall(qn('w:vertAlign')):
+            rPr.remove(va)
+        va = etree.SubElement(rPr, qn('w:vertAlign'))
+        va.set(qn('w:val'), 'superscript')
+
+    t = etree.SubElement(r, qn('w:t'))
+    t.set(qn('xml:space'), 'preserve')
+    t.text = text
+    ins_el.append(r)
+    return ins_el
 
 def fld_run(kind: str, instr: Optional[str] = None):
     r = etree.Element(qn('w:r'))
@@ -63,7 +130,12 @@ def make_text_run(model_run, text: str):
     new_r.append(t)
     return new_r
 
-def convert_paren_site(p, run_idx: int, match_start: int, match_end: int, formatted_text: Optional[str] = None):
+def convert_paren_site(
+    p, run_idx: int, match_start: int, match_end: int,
+    formatted_text: Optional[str] = None,
+    track_changes: bool = False,
+    tracker: Optional[RevisionTracker] = None
+):
     r = p.runs[run_idx]
     text = r.text
     before, cited, after = text[:match_start], text[match_start:match_end], text[match_end:]
@@ -75,11 +147,21 @@ def convert_paren_site(p, run_idx: int, match_start: int, match_end: int, format
     if after and after[0] in '.,;:':
         lead_punct, after = after[0], after[1:]
     r.text = before + lead_punct
-    sup_r = make_sup_run(r, sup_text)
-    r._r.addnext(sup_r)
-    if after:
-        sup_r.addnext(make_text_run(r, after))
-    return sup_r
+
+    if track_changes and tracker:
+        del_el = make_del_element(cited, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
+        ins_el = make_ins_element(sup_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=r)
+        r._r.addnext(del_el)
+        del_el.addnext(ins_el)
+        if after:
+            ins_el.addnext(make_text_run(r, after))
+        return ins_el
+    else:
+        sup_r = make_sup_run(r, sup_text)
+        r._r.addnext(sup_r)
+        if after:
+            sup_r.addnext(make_text_run(r, after))
+        return sup_r
 
 def format_condensed_citation(nums: List[int]) -> str:
     """
@@ -231,15 +313,25 @@ def link_docx_manuscript(
     references: List[ReferenceEntry],
     verdicts: Optional[Dict[int, ValidationVerdict]] = None,
     output_target: Optional[Union[str, BytesIO]] = None,
-    renumber_ama: bool = True
+    renumber_ama: bool = True,
+    track_changes: bool = False,
+    author: str = "Co-Scientist"
 ) -> Union[str, BytesIO]:
     """
     Transforms the docx by injecting native Zotero field codes.
     When renumber_ama is True, re-numbers in-text citations consecutively (first cited = #1)
     and re-orders the bibliography paragraphs accordingly.
+    When track_changes is True, records all modifications using native OpenXML <w:del> and <w:ins>
+    tags attributed to author, enabling Word's revision tracking mode.
     """
     doc = docx.Document(docx_input)
     ref_by_num = {r.ref_num: r for r in references}
+    tracker = RevisionTracker(author=author) if track_changes else None
+
+    if track_changes:
+        settings_el = doc.settings._element
+        if settings_el.find(qn('w:trackRevisions')) is None:
+            settings_el.append(etree.Element(qn('w:trackRevisions')))
 
     # Compute AMA sequential re-numbering permutation map
     if renumber_ama:
@@ -269,13 +361,30 @@ def link_docx_manuscript(
 
         if s.kind in ('paren', 'bracket') and s.match_start is not None and s.match_end is not None:
             if s.run_idx < len(p.runs):
-                sup_el = convert_paren_site(p, s.run_idx, s.match_start, s.match_end, formatted_text=condensed_str)
+                sup_el = convert_paren_site(
+                    p, s.run_idx, s.match_start, s.match_end,
+                    formatted_text=condensed_str,
+                    track_changes=track_changes,
+                    tracker=tracker
+                )
             else:
                 continue
         elif s.run_idx < len(p.runs):
             sup_run = p.runs[s.run_idx]
-            sup_el = sup_run._r
-            sup_run.text = condensed_str
+            if track_changes and tracker:
+                old_text = sup_run.text
+                if old_text != condensed_str:
+                    del_el = make_del_element(old_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=sup_run)
+                    ins_el = make_ins_element(condensed_str, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=sup_run)
+                    sup_run._r.addnext(del_el)
+                    del_el.addnext(ins_el)
+                    sup_run.text = ""
+                    sup_el = ins_el
+                else:
+                    sup_el = sup_run._r
+            else:
+                sup_el = sup_run._r
+                sup_run.text = condensed_str
         else:
             continue
 
@@ -317,16 +426,59 @@ def link_docx_manuscript(
             old_prefix = m.group(1) + "."
             new_prefix = f"{new_n}."
             rest_content = m.group(2)
-            replaced = False
-            for r in p.runs:
-                if old_prefix in r.text:
-                    r.text = r.text.replace(old_prefix, new_prefix, 1)
-                    replaced = True
-                    break
-            if not replaced and p.runs:
-                p.runs[0].text = f"{new_n}. " + rest_content
-                for r in p.runs[1:]:
-                    r.text = ""
+
+            # Check if reference has a recovered DOI that should be added
+            v = (verdicts or {}).get(old_n)
+            recovered_doi = None
+            candidate_doi = ""
+            if v:
+                if hasattr(v, 'recovered_doi') and v.recovered_doi:
+                    candidate_doi = v.recovered_doi.strip()
+                elif hasattr(v, 'doi') and v.doi:
+                    candidate_doi = v.doi.strip()
+                elif isinstance(v, dict):
+                    candidate_doi = (v.get('recovered_doi') or v.get('doi') or '').strip()
+
+            if candidate_doi and candidate_doi not in p.text:
+                recovered_doi = f"https://doi.org/{candidate_doi}" if not candidate_doi.startswith("http") else candidate_doi
+
+            if track_changes and tracker:
+                if old_n != new_n:
+                    replaced = False
+                    for r in p.runs:
+                        if old_prefix in r.text:
+                            parts = r.text.split(old_prefix, 1)
+                            r.text = parts[0]
+                            del_el = make_del_element(old_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
+                            ins_el = make_ins_element(new_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
+                            r._r.addnext(del_el)
+                            del_el.addnext(ins_el)
+                            if parts[1]:
+                                ins_el.addnext(make_text_run(r, parts[1]))
+                            replaced = True
+                            break
+                    if not replaced and p.runs:
+                        del_el = make_del_element(f"{old_n}. ", tracker.next_id(), tracker.author, tracker.date_str)
+                        ins_el = make_ins_element(f"{new_n}. ", tracker.next_id(), tracker.author, tracker.date_str)
+                        p._p.insert(0, ins_el)
+                        p._p.insert(0, del_el)
+                        p.runs[0].text = rest_content
+                if recovered_doi:
+                    ins_doi = make_ins_element(f" {recovered_doi}", tracker.next_id(), tracker.author, tracker.date_str)
+                    p._p.append(ins_doi)
+            else:
+                replaced = False
+                for r in p.runs:
+                    if old_prefix in r.text:
+                        r.text = r.text.replace(old_prefix, new_prefix, 1)
+                        replaced = True
+                        break
+                if not replaced and p.runs:
+                    p.runs[0].text = f"{new_n}. " + rest_content
+                    for r in p.runs[1:]:
+                        r.text = ""
+                if recovered_doi:
+                    p.add_run(f" {recovered_doi}")
 
         # Re-order the paragraphs in the document XML according to new_n
         if renumber_ama and len(ref_paras_info) > 1:

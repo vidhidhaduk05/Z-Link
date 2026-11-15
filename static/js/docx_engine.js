@@ -403,6 +403,50 @@ function createFieldRun(doc, type, instrText = null) {
   return r;
 }
 
+function createDelRun(doc, text, revId, author = "Co-Scientist", dateStr = null, isSuperscript = false) {
+  const delEl = doc.createElementNS(W_NS, "w:del");
+  delEl.setAttributeNS(W_NS, "w:id", String(revId));
+  delEl.setAttributeNS(W_NS, "w:author", author);
+  delEl.setAttributeNS(W_NS, "w:date", dateStr || new Date().toISOString());
+
+  const r = doc.createElementNS(W_NS, "w:r");
+  if (isSuperscript) {
+    const rPr = doc.createElementNS(W_NS, "w:rPr");
+    const va = doc.createElementNS(W_NS, "w:vertAlign");
+    va.setAttributeNS(W_NS, "w:val", "superscript");
+    rPr.appendChild(va);
+    r.appendChild(rPr);
+  }
+  const delText = doc.createElementNS(W_NS, "w:delText");
+  delText.setAttribute("xml:space", "preserve");
+  delText.textContent = text;
+  r.appendChild(delText);
+  delEl.appendChild(r);
+  return delEl;
+}
+
+function createInsRun(doc, text, revId, author = "Co-Scientist", dateStr = null, isSuperscript = false) {
+  const insEl = doc.createElementNS(W_NS, "w:ins");
+  insEl.setAttributeNS(W_NS, "w:id", String(revId));
+  insEl.setAttributeNS(W_NS, "w:author", author);
+  insEl.setAttributeNS(W_NS, "w:date", dateStr || new Date().toISOString());
+
+  const r = doc.createElementNS(W_NS, "w:r");
+  if (isSuperscript) {
+    const rPr = doc.createElementNS(W_NS, "w:rPr");
+    const va = doc.createElementNS(W_NS, "w:vertAlign");
+    va.setAttributeNS(W_NS, "w:val", "superscript");
+    rPr.appendChild(va);
+    r.appendChild(rPr);
+  }
+  const t = doc.createElementNS(W_NS, "w:t");
+  t.setAttribute("xml:space", "preserve");
+  t.textContent = text;
+  r.appendChild(t);
+  insEl.appendChild(r);
+  return insEl;
+}
+
 export function formatCondensedCitation(nums) {
   if (!nums || nums.length === 0) return "";
   const sortedUnique = Array.from(new Set(nums)).sort((a,b) => a - b);
@@ -476,8 +520,16 @@ export function buildAmaRenumberingMap(references, sites) {
   return { mapping, firstSeenOrder, uncited };
 }
 
-export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}, renumberAma = true) {
+export async function injectZoteroFieldsInBrowser(
+  parsedData,
+  verdicts = {},
+  renumberAma = true,
+  trackChanges = false,
+  author = "Co-Scientist"
+) {
   const { zip, xmlDoc, paragraphs, sites, references } = parsedData;
+  let revCounter = 1;
+  const dateStr = new Date().toISOString();
 
   // Determine AMA sequential re-numbering map
   let mapping = {};
@@ -541,8 +593,21 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}, ren
     const newSiteNums = Array.from(new Set(site.nums.map(n => mapping[n] || n))).sort((a,b) => a - b);
     const condensedStr = formatCondensedCitation(newSiteNums);
     const tNodes = targetRun.getElementsByTagNameNS(W_NS, "t");
-    if (tNodes.length > 0) {
-      tNodes[0].textContent = condensedStr;
+    const oldText = (tNodes.length > 0) ? tNodes[0].textContent : site.text;
+
+    let targetAnchor = targetRun;
+
+    if (trackChanges && oldText !== condensedStr) {
+      const delEl = createDelRun(xmlDoc, oldText, revCounter++, author, dateStr, site.kind === "sup");
+      const insEl = createInsRun(xmlDoc, condensedStr, revCounter++, author, dateStr, true);
+      p.insertBefore(delEl, targetRun);
+      p.insertBefore(insEl, targetRun);
+      p.removeChild(targetRun);
+      targetAnchor = insEl;
+    } else {
+      if (tNodes.length > 0) {
+        tNodes[0].textContent = condensedStr;
+      }
     }
 
     const citationItems = newSiteNums.map(n => ({
@@ -568,11 +633,11 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}, ren
     const rSep = createFieldRun(xmlDoc, "separate");
     const rEnd = createFieldRun(xmlDoc, "end");
 
-    p.insertBefore(rBegin, targetRun);
-    p.insertBefore(rInstr, targetRun);
-    p.insertBefore(rSep, targetRun);
-    if (targetRun.nextSibling) {
-      p.insertBefore(rEnd, targetRun.nextSibling);
+    p.insertBefore(rBegin, targetAnchor);
+    p.insertBefore(rInstr, targetAnchor);
+    p.insertBefore(rSep, targetAnchor);
+    if (targetAnchor.nextSibling) {
+      p.insertBefore(rEnd, targetAnchor.nextSibling);
     } else {
       p.appendChild(rEnd);
     }
@@ -597,16 +662,73 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}, ren
       const oldPrefix = item.oldN + ".";
       const newPrefix = item.newN + ".";
       const tNodes = Array.from(item.p.getElementsByTagNameNS(W_NS, "t"));
-      let replaced = false;
-      for (const t of tNodes) {
-        if (t.textContent.includes(oldPrefix)) {
-          t.textContent = t.textContent.replace(oldPrefix, newPrefix);
-          replaced = true;
-          break;
+
+      const v = verdicts[item.oldN] || {};
+      let recoveredDoi = null;
+      if (v.doi && v.doi.trim()) {
+        const cleanDoi = v.doi.trim();
+        const pFullText = tNodes.map(x => x.textContent).join("");
+        if (!pFullText.includes(cleanDoi)) {
+          recoveredDoi = cleanDoi.startsWith("http") ? cleanDoi : `https://doi.org/${cleanDoi}`;
         }
       }
-      if (!replaced && tNodes.length > 0) {
-        tNodes[0].textContent = `${item.newN}. ${item.rest}`;
+
+      if (trackChanges && item.oldN !== item.newN) {
+        let replaced = false;
+        for (const t of tNodes) {
+          if (t.textContent.includes(oldPrefix)) {
+            const parts = t.textContent.split(oldPrefix);
+            t.textContent = parts[0];
+            const delEl = createDelRun(xmlDoc, oldPrefix, revCounter++, author, dateStr);
+            const insEl = createInsRun(xmlDoc, newPrefix, revCounter++, author, dateStr);
+            const runParent = t.parentNode;
+            item.p.insertBefore(delEl, runParent.nextSibling);
+            item.p.insertBefore(insEl, delEl.nextSibling);
+            if (parts[1]) {
+              const afterRun = xmlDoc.createElementNS(W_NS, "w:r");
+              const afterT = xmlDoc.createElementNS(W_NS, "w:t");
+              afterT.setAttribute("xml:space", "preserve");
+              afterT.textContent = parts[1];
+              afterRun.appendChild(afterT);
+              item.p.insertBefore(afterRun, insEl.nextSibling);
+            }
+            replaced = true;
+            break;
+          }
+        }
+        if (!replaced && tNodes.length > 0) {
+          const delEl = createDelRun(xmlDoc, `${item.oldN}. `, revCounter++, author, dateStr);
+          const insEl = createInsRun(xmlDoc, `${item.newN}. `, revCounter++, author, dateStr);
+          item.p.insertBefore(insEl, item.p.firstChild);
+          item.p.insertBefore(delEl, item.p.firstChild);
+          tNodes[0].textContent = item.rest;
+        }
+      } else {
+        let replaced = false;
+        for (const t of tNodes) {
+          if (t.textContent.includes(oldPrefix)) {
+            t.textContent = t.textContent.replace(oldPrefix, newPrefix);
+            replaced = true;
+            break;
+          }
+        }
+        if (!replaced && tNodes.length > 0) {
+          tNodes[0].textContent = `${item.newN}. ${item.rest}`;
+        }
+      }
+
+      if (recoveredDoi) {
+        if (trackChanges) {
+          const insDoi = createInsRun(xmlDoc, ` ${recoveredDoi}`, revCounter++, author, dateStr);
+          item.p.appendChild(insDoi);
+        } else {
+          const rDoi = xmlDoc.createElementNS(W_NS, "w:r");
+          const tDoi = xmlDoc.createElementNS(W_NS, "w:t");
+          tDoi.setAttribute("xml:space", "preserve");
+          tDoi.textContent = ` ${recoveredDoi}`;
+          rDoi.appendChild(tDoi);
+          item.p.appendChild(rDoi);
+        }
       }
     });
 
@@ -657,6 +779,27 @@ export async function injectZoteroFieldsInBrowser(parsedData, verdicts = {}, ren
     firstDocP.insertBefore(createFieldRun(xmlDoc, "separate"), firstDocP.firstChild);
     firstDocP.insertBefore(createFieldRun(xmlDoc, "instr", prefInstr), firstDocP.firstChild);
     firstDocP.insertBefore(createFieldRun(xmlDoc, "begin"), firstDocP.firstChild);
+  }
+
+  // Enable Track Changes in word/settings.xml if requested
+  if (trackChanges) {
+    try {
+      let settingsXmlStr = "";
+      if (zip.file("word/settings.xml")) {
+        settingsXmlStr = await zip.file("word/settings.xml").async("text");
+      }
+      if (settingsXmlStr) {
+        if (!settingsXmlStr.includes("<w:trackRevisions")) {
+          settingsXmlStr = settingsXmlStr.replace("</w:settings>", '<w:trackRevisions/></w:settings>');
+          zip.file("word/settings.xml", settingsXmlStr);
+        }
+      } else {
+        const newSettings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings xmlns:w="${W_NS}"><w:trackRevisions/></w:settings>`;
+        zip.file("word/settings.xml", newSettings);
+      }
+    } catch (e) {
+      console.warn("Could not inject trackRevisions in settings.xml", e);
+    }
   }
 
   // Serialize and repack zip

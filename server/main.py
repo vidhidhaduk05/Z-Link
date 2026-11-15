@@ -157,36 +157,77 @@ async def link_manuscript(job_id: str):
     if not job["file_bytes"]:
         raise HTTPException(status_code=400, detail="Linking requires an uploaded .docx file.")
 
-    out_stream = BytesIO()
+    # Generate Clean Linked document
+    clean_stream = BytesIO()
     link_docx_manuscript(
         docx_input=BytesIO(job["file_bytes"]),
         sites=job["sites"],
         references=job["references"],
         verdicts=job["verdicts"],
-        output_target=out_stream,
-        renumber_ama=True
+        output_target=clean_stream,
+        renumber_ama=True,
+        track_changes=False
     )
-    job["linked_bytes"] = out_stream.getvalue()
+    job["linked_bytes"] = clean_stream.getvalue()
+
+    # Generate Tracked Changes document (for peer reviewers / editors)
+    tracked_stream = BytesIO()
+    link_docx_manuscript(
+        docx_input=BytesIO(job["file_bytes"]),
+        sites=job["sites"],
+        references=job["references"],
+        verdicts=job["verdicts"],
+        output_target=tracked_stream,
+        renumber_ama=True,
+        track_changes=True,
+        author="Co-Scientist"
+    )
+    job["tracked_bytes"] = tracked_stream.getvalue()
+
     job["ris_text"] = generate_ris(job["references"], job["verdicts"], mapping=job.get("mapping"))
 
     return {
         "job_id": job_id,
         "status": "ready",
         "download_docx": f"/api/download/{job_id}/docx",
+        "download_tracked_docx": f"/api/download/{job_id}/tracked_docx",
         "download_ris": f"/api/download/{job_id}/ris",
         "download_report": f"/api/download/{job_id}/report"
     }
 
 @app.get("/api/download/{job_id}/docx")
-def download_docx(job_id: str):
-    if job_id not in JOBS_CACHE or "linked_bytes" not in JOBS_CACHE[job_id]:
+def download_docx(job_id: str, mode: Optional[str] = None):
+    if job_id not in JOBS_CACHE:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if mode == "tracked" and "tracked_bytes" in JOBS_CACHE[job_id]:
+        content = JOBS_CACHE[job_id]["tracked_bytes"]
+        suffix = "tracked_changes"
+    elif "linked_bytes" in JOBS_CACHE[job_id]:
+        content = JOBS_CACHE[job_id]["linked_bytes"]
+        suffix = "zotero_linked"
+    else:
         raise HTTPException(status_code=404, detail="Linked file not ready.")
-    
+
     orig_name = JOBS_CACHE[job_id]["filename"]
     base = os.path.splitext(orig_name)[0]
-    out_name = f"{base}_zotero_linked.docx"
+    out_name = f"{base}_{suffix}.docx"
     return Response(
-        content=JOBS_CACHE[job_id]["linked_bytes"],
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'}
+    )
+
+@app.get("/api/download/{job_id}/tracked_docx")
+def download_tracked_docx(job_id: str):
+    if job_id not in JOBS_CACHE or "tracked_bytes" not in JOBS_CACHE[job_id]:
+        raise HTTPException(status_code=404, detail="Tracked changes file not ready.")
+
+    orig_name = JOBS_CACHE[job_id]["filename"]
+    base = os.path.splitext(orig_name)[0]
+    out_name = f"{base}_tracked_changes.docx"
+    return Response(
+        content=JOBS_CACHE[job_id]["tracked_bytes"],
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{out_name}"'}
     )

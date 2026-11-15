@@ -84,3 +84,15 @@
   4. **Physical Bibliography DOM Re-Ordering**: Rather than merely rewriting the leading numbering prefix (`3. Title` $\to$ `1. Title`), the underlying Word XML paragraph nodes (`<w:p>`) are extracted and re-inserted in sorted sequential order using `lxml` on the Python server (`parent.insert(insert_idx + idx, p._p)`) and DOM `insertBefore` in browser client (`docx_engine.js`).
   5. **Synchronized RIS Export**: Both server and client RIS generators order records strictly by new AMA sequence, injecting `M1 - Ref {new_num}` and `ID - ITEM-{new_num}`.
 - **Verification**: Verified via `test_21_ama_sequential_renumbering_and_reordering`, `test_22_ama_range_condensation`, `test_23_uncited_reference_placed_at_end`, and `test_24_acta2_identity_permutation` (24/24 tests passing).
+
+### [2026-11-15 08:45] ARCH-DECISION-009: Native Word OpenXML Track Changes Implementation & Dual-Mode Export Architecture
+- **Context**: Academic journal submission workflows require authors to provide marked-up copies highlighting all revisions for reviewers and editors. Previous implementations only exported a clean accepted document, making it difficult for reviewers to see which citations were renumbered, reformatted, or augmented with recovered DOIs.
+- **Decision**:
+  1. **ISO/IEC 29500-1 Revisions**: Implemented native `<w:del>` (strikethrough with `<w:delText>`) and `<w:ins>` (underlined with `<w:t>`) elements for in-text citation format conversions, chronological renumbering, and bibliography prefix rewrites, attributed to author `"Co-Scientist"`.
+  2. **Tracked Recovered DOIs**: References where missing DOIs were recovered append `<w:ins>` runs at the end of the bibliography paragraph so reviewers immediately see the added persistent identifiers.
+  3. **Revision Mode Enabler**: Injected `<w:trackRevisions/>` into `word/settings.xml` so Microsoft Word, LibreOffice, and Pages automatically open the document with revision tracking visibly active.
+  4. **Dual-Mode Delivery**: Provided distinct download pathways:
+     - 📝 **Download Tracked Changes (.docx)**: Highlighted markup for peer review and editorial inspection.
+     - 📄 **Download Clean Linked (.docx)**: Clean accepted version with active Zotero fields.
+     - 📚 **Download Corrected (.ris)**: Synced reference library.
+- **Verification**: Verified via `test_25_track_changes_in_text_citations`, `test_26_track_changes_in_bibliography_and_doi`, `test_27_track_revisions_setting_flag`, and `test_28_clean_vs_tracked_parity` in `tests/test_engine.py` (28/28 tests passing).
