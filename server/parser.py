@@ -196,11 +196,48 @@ def profile_document_citation_format(
         return "paren"
     return "sup"
 
+def has_tracked_revisions(doc: docx.Document) -> bool:
+    """Returns True if the document contains any OpenXML <w:del> or <w:ins> elements."""
+    body = doc._body._element
+    return bool(body.xpath('.//w:del') or body.xpath('.//w:ins'))
+
+def accept_prior_revisions(doc: docx.Document) -> int:
+    """
+    Accepts all existing tracked revisions in doc, bringing it to the
+    'Final (Accepted)' baseline before citation auditing and linking.
+    - Removes all <w:del> elements completely.
+    - Unwraps all <w:ins> elements so their child runs become normal runs.
+    Returns the count of resolved revisions.
+    """
+    body = doc._body._element
+    dels = body.xpath('.//w:del')
+    inss = body.xpath('.//w:ins')
+    total = len(dels) + len(inss)
+
+    for del_el in dels:
+        parent = del_el.getparent()
+        if parent is not None:
+            parent.remove(del_el)
+
+    for ins_el in inss:
+        parent = ins_el.getparent()
+        if parent is not None:
+            ins_idx = parent.index(ins_el)
+            children = list(ins_el)
+            for offset, child in enumerate(children):
+                parent.insert(ins_idx + offset, child)
+            parent.remove(ins_el)
+
+    return total
+
 def parse_docx_manuscript(
     docx_path: str,
-    citation_format: str = "auto"
+    citation_format: str = "auto",
+    accept_revisions: bool = True
 ) -> Tuple[List[str], List[CitationSite], List[ReferenceEntry]]:
     doc = docx.Document(docx_path)
+    if accept_revisions and has_tracked_revisions(doc):
+        accept_prior_revisions(doc)
     paras = doc.paragraphs
     return parse_paragraphs_list([p.text for p in paras], doc, citation_format=citation_format)
 

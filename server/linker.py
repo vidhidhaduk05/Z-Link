@@ -410,6 +410,9 @@ def link_docx_manuscript(
     tags attributed to author, enabling Word's revision tracking mode.
     """
     doc = docx.Document(docx_input)
+    from server.parser import has_tracked_revisions, accept_prior_revisions
+    if has_tracked_revisions(doc):
+        accept_prior_revisions(doc)
     ref_by_num = {r.ref_num: r for r in references}
     tracker = RevisionTracker(author=author) if track_changes else None
 

@@ -110,6 +110,32 @@ function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
   return "sup";
 }
 
+export function hasTrackedRevisions(xmlDoc) {
+  const dels = xmlDoc.getElementsByTagNameNS(W_NS, "del");
+  const inss = xmlDoc.getElementsByTagNameNS(W_NS, "ins");
+  return (dels.length > 0 || inss.length > 0);
+}
+
+export function acceptPriorRevisions(xmlDoc) {
+  const dels = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "del"));
+  dels.forEach(delEl => {
+    if (delEl.parentNode) {
+      delEl.parentNode.removeChild(delEl);
+    }
+  });
+
+  const inss = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "ins"));
+  inss.forEach(insEl => {
+    const parent = insEl.parentNode;
+    if (parent) {
+      while (insEl.firstChild) {
+        parent.insertBefore(insEl.firstChild, insEl);
+      }
+      parent.removeChild(insEl);
+    }
+  });
+}
+
 export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   if (!window.JSZip) {
     throw new Error("JSZip library not loaded.");
@@ -120,6 +146,9 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(docXmlStr, "application/xml");
+  if (hasTrackedRevisions(xmlDoc)) {
+    acceptPriorRevisions(xmlDoc);
+  }
   const paragraphs = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
 
   const paraTexts = paragraphs.map(p => {

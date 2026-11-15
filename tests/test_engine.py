@@ -829,6 +829,89 @@ class TestZoteroLinkEngine(unittest.TestCase):
                     f"Paragraph {i} violates OpenXML schema: w:pPr is not the first child"
                 )
 
+    def test_32_document_with_existing_tracked_insertions(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from lxml import etree
+        from docx.oxml.ns import qn
+
+        doc = docx.Document()
+        p = doc.add_paragraph("Base text ")
+        # Insert a run with citation inside w:ins from a prior reviewer
+        ins = etree.SubElement(p._p, qn('w:ins'), {qn('w:id'): '1', qn('w:author'): 'Dr. Reviewer'})
+        r_ins = etree.SubElement(ins, qn('w:r'))
+        etree.SubElement(r_ins, qn('w:t')).text = "with inserted citation [1]"
+        p.add_run(" end of paragraph.")
+
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Alpha A. Active study. Lancet 2020.")
+
+        buf = BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(buf, citation_format="bracket")
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(len(sites), 1, "Must detect citation inside pre-existing <w:ins>")
+        self.assertEqual(sites[0].nums, [1])
+
+        # Link document
+        buf.seek(0)
+        out_buf = BytesIO()
+        link_docx_manuscript(buf, sites, refs, output_target=out_buf, track_changes=True)
+        out_buf.seek(0)
+        out_doc = docx.Document(out_buf)
+        self.assertIn("Alpha A", out_doc.paragraphs[2].text)
+
+    def test_33_document_with_existing_tracked_deletions(self):
+        from server.parser import parse_docx_manuscript
+        from lxml import etree
+        from docx.oxml.ns import qn
+
+        doc = docx.Document()
+        p = doc.add_paragraph("Base text ")
+        # Add a deleted citation inside w:del
+        del_el = etree.SubElement(p._p, qn('w:del'), {qn('w:id'): '2', qn('w:author'): 'Dr. Reviewer'})
+        r_del = etree.SubElement(del_el, qn('w:r'))
+        etree.SubElement(r_del, qn('w:delText')).text = "deleted citation [99]"
+        p.add_run(" continuing active sentence.")
+
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Alpha A. Active study. Lancet 2020.")
+
+        buf = BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(buf, citation_format="bracket")
+        # The deleted citation [99] must NOT be detected as an active site!
+        self.assertEqual(len(sites), 0, "Deleted citations in <w:del> must be completely ignored")
+
+    def test_34_accept_prior_revisions_baseline(self):
+        from server.parser import has_tracked_revisions, accept_prior_revisions
+        from lxml import etree
+        from docx.oxml.ns import qn
+
+        doc = docx.Document()
+        p = doc.add_paragraph("Original ")
+        del_el = etree.SubElement(p._p, qn('w:del'), {qn('w:id'): '1', qn('w:author'): 'Reviewer'})
+        r_del = etree.SubElement(del_el, qn('w:r'))
+        etree.SubElement(r_del, qn('w:delText')).text = "old words "
+
+        ins_el = etree.SubElement(p._p, qn('w:ins'), {qn('w:id'): '2', qn('w:author'): 'Reviewer'})
+        r_ins = etree.SubElement(ins_el, qn('w:r'))
+        etree.SubElement(r_ins, qn('w:t')).text = "new words "
+        p.add_run("finished.")
+
+        self.assertTrue(has_tracked_revisions(doc))
+        resolved_count = accept_prior_revisions(doc)
+        self.assertEqual(resolved_count, 2)
+        self.assertFalse(has_tracked_revisions(doc))
+        self.assertEqual(p.text, "Original new words finished.")
+        # Ensure no nested revisions or lingering del elements exist
+        self.assertEqual(len(doc._body._element.xpath('.//w:del')), 0)
+        self.assertEqual(len(doc._body._element.xpath('.//w:ins')), 0)
+
 if __name__ == "__main__":
     unittest.main()
 

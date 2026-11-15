@@ -112,3 +112,16 @@
   5. **Deterministic Sequential XML Placement**: Used `lxml` `curr_anchor.addnext(bp._p)` sequentially after the `REFERENCES` header, eliminating index shifting and preventing any reference jumbling.
   6. **Dual-Engine Parity**: Implemented identical boundary isolation, atomic blocks, and schema compliance in both Python (`server/linker.py`) and JavaScript (`static/js/docx_engine.js`).
 - **Verification**: Verified via `test_29_reference_section_bounds_isolation`, `test_30_atomic_multiline_reference_preservation`, and `test_31_schema_pPr_first_invariant` in `tests/test_engine.py` (31/31 tests passing). Verified on real-world `ACTA2_Manuscript_11.14.2026.docx` (all 43 references intact, unjumbled, and schema compliant).
+
+### [2026-11-15 10:52] ARCH-DECISION-011: Pre-Existing Tracked Changes Normalization & ISO/IEC 29500 Non-Nesting Guarantee
+- **Context**: User queried whether the system can handle documents that already contain tracked changes from prior reviewers or co-authors.
+- **Root Cause & Technical Constraints**:
+  1. Standard `python-docx` queries direct child runs (`xpath('./w:r')`), causing runs inside `<w:ins>` to be completely omitted.
+  2. Deleted text (`<w:del>`) containing obsolete citations can mistakenly be detected as active references if descendant queries are naive.
+  3. ISO/IEC 29500-1 strictly forbids nested revision elements (e.g. `<w:ins>` containing `<w:del>` or `<w:ins>`). Applying new revision tracking on top of pre-existing revisions causes Word schema validation failure and "unreadable content" errors.
+- **Decision & Implementation**:
+  1. Implemented `has_tracked_revisions(doc)` and `accept_prior_revisions(doc)` in `server/parser.py`, `server/linker.py`, and `static/js/docx_engine.js`.
+  2. Prior deletions (`<w:del>`) are stripped completely so obsolete citations and deleted references never produce false broken links.
+  3. Prior insertions (`<w:ins>`) are promoted into regular runs, ensuring 100% of newly added citations and references are visible to the profiling, parsing, and linking engines.
+  4. Brings the document into the "Final / Accepted" baseline before applying Co-Scientist citations, AMA renumbering, and recovered DOIs, preventing any invalid nested `<w:ins><w:ins>` tags.
+- **Verification**: Verified via `test_32_document_with_existing_tracked_insertions`, `test_33_document_with_existing_tracked_deletions`, and `test_34_accept_prior_revisions_baseline` in `tests/test_engine.py` (34/34 tests passing).
