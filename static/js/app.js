@@ -6,11 +6,19 @@
 import { parseDocxFile, injectZoteroFieldsInBrowser } from './docx_engine.js';
 import { validateReferenceCrossref } from './crossref_audit.js';
 import { generateClientRis } from './ris_generator.js';
+import {
+  CSL_STYLES,
+  parseAuthorNames,
+  formatInTextForStyle,
+  formatBibliographyForStyle,
+  sortReferencesForStyle
+} from './csl_formatter.js';
 
 let appState = {
   fsmState: 'IDLE',
   currentFile: null,
   fileName: '',
+  targetStyle: 'ama',
   parsedData: null,
   verdicts: {},
   mappings: {},
@@ -26,6 +34,8 @@ const btnSample = document.getElementById('btnSample');
 const btnActa2 = document.getElementById('btnActa2');
 const citationFormatSelect = document.getElementById('citationFormatSelect');
 const customFormatInput = document.getElementById('customFormatInput');
+const targetStyleSelect = document.getElementById('targetStyleSelect');
+const targetStyleBadge = document.getElementById('targetStyleBadge');
 const resultsSection = document.getElementById('resultsSection');
 const tableBody = document.getElementById('referencesTableBody');
 const manuscriptViewer = document.getElementById('manuscriptViewer');
@@ -165,6 +175,22 @@ if (citationFormatSelect && customFormatInput) {
       customFormatInput.focus();
     } else {
       customFormatInput.style.display = 'none';
+    }
+  });
+}
+
+if (targetStyleSelect) {
+  targetStyleSelect.addEventListener('change', () => {
+    const newStyle = targetStyleSelect.value;
+    appState.targetStyle = newStyle;
+    const styleInfo = CSL_STYLES[newStyle] || CSL_STYLES['ama'];
+    if (targetStyleBadge) {
+      targetStyleBadge.textContent = `Active: ${styleInfo.name}`;
+    }
+    if (appState.parsedData) {
+      renderManuscriptExplorer();
+      renderAuditTable();
+      updateActiveReferenceCard(appState.selectedRefNum || 1);
     }
   });
 }
@@ -358,9 +384,16 @@ function computeUsageMappings() {
 
 function renderAuditTable() {
   tableBody.innerHTML = '';
+  if (!appState.parsedData) return;
   const { references } = appState.parsedData;
+  const targetStyle = appState.targetStyle || 'ama';
+  const styleInfo = CSL_STYLES[targetStyle] || CSL_STYLES['ama'];
+  const isAuthorDate = styleInfo.category === 'author-date';
 
-  references.forEach(ref => {
+  // Sort references according to style rules (sequential appearance vs alphabetical)
+  const sortedRefs = sortReferencesForStyle(targetStyle, references, appState.amaMapping || {});
+
+  sortedRefs.forEach(ref => {
     const v = appState.verdicts[ref.ref_num] || {};
     const m = (appState.mappings && appState.mappings[ref.ref_num]) || { occurrences: [] };
 
@@ -416,14 +449,23 @@ function renderAuditTable() {
       ? v.crossref_authors.slice(0, 3).join(', ') + (v.crossref_authors.length > 3 ? ' et al.' : '')
       : (ref.authors.slice(0, 2).join(', ') || '—');
 
-    const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
-    const isRenumbered = amaNum !== ref.ref_num;
-    const renumberedTag = isRenumbered 
-      ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ AMA #${amaNum}</span>` 
-      : '';
+    let cell1Html = '';
+    if (isAuthorDate) {
+      const parsedAuth = parseAuthorNames(ref.authors);
+      const primaryAuthor = (parsedAuth.length > 0 && parsedAuth[0].family) ? parsedAuth[0].family : 'Ref';
+      const year = ref.year || (ref.raw_text.match(/\b(19\d\d|20\d\d)\b/) || ['n.d.'])[0];
+      cell1Html = `<strong>[${ref.ref_num}]</strong><br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #f3e8ff; color: #6b21a8; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Author-Date sort key">${escapeHtml(primaryAuthor)}, ${year}</span>`;
+    } else {
+      const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
+      const isRenumbered = amaNum !== ref.ref_num;
+      const renumberedTag = isRenumbered 
+        ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ #${amaNum}</span>` 
+        : '';
+      cell1Html = `[${ref.ref_num}]${renumberedTag}`;
+    }
 
     tr.innerHTML = `
-      <td class="ref-num-cell">[${ref.ref_num}]${renumberedTag}</td>
+      <td class="ref-num-cell">${cell1Html}</td>
       <td>
         <strong>${titleDisplay}</strong><br/>
         <span style="color: var(--reading-ink-secondary); font-size: 12px;">${authorDisplay}</span>
@@ -449,6 +491,10 @@ function updateAuditTableRow(refNum) {
   if (!tr || !appState.parsedData) return;
   const ref = appState.parsedData.references.find(r => r.ref_num === refNum);
   if (!ref) return;
+
+  const targetStyle = appState.targetStyle || 'ama';
+  const styleInfo = CSL_STYLES[targetStyle] || CSL_STYLES['ama'];
+  const isAuthorDate = styleInfo.category === 'author-date';
 
   const v = appState.verdicts[refNum] || {};
   const m = (appState.mappings && appState.mappings[refNum]) || { occurrences: [] };
@@ -488,14 +534,23 @@ function updateAuditTableRow(refNum) {
     ? v.crossref_authors.slice(0, 3).join(', ') + (v.crossref_authors.length > 3 ? ' et al.' : '')
     : (ref.authors.slice(0, 2).join(', ') || '—');
 
-  const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
-  const isRenumbered = amaNum !== ref.ref_num;
-  const renumberedTag = isRenumbered 
-    ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ AMA #${amaNum}</span>` 
-    : '';
+  let cell1Html = '';
+  if (isAuthorDate) {
+    const parsedAuth = parseAuthorNames(ref.authors);
+    const primaryAuthor = (parsedAuth.length > 0 && parsedAuth[0].family) ? parsedAuth[0].family : 'Ref';
+    const year = ref.year || (ref.raw_text.match(/\b(19\d\d|20\d\d)\b/) || ['n.d.'])[0];
+    cell1Html = `<strong>[${ref.ref_num}]</strong><br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #f3e8ff; color: #6b21a8; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Author-Date sort key">${escapeHtml(primaryAuthor)}, ${year}</span>`;
+  } else {
+    const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
+    const isRenumbered = amaNum !== ref.ref_num;
+    const renumberedTag = isRenumbered 
+      ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ #${amaNum}</span>` 
+      : '';
+    cell1Html = `[${ref.ref_num}]${renumberedTag}`;
+  }
 
   tr.innerHTML = `
-    <td class="ref-num-cell">[${ref.ref_num}]${renumberedTag}</td>
+    <td class="ref-num-cell">${cell1Html}</td>
     <td>
       <strong>${titleDisplay}</strong><br/>
       <span style="color: var(--reading-ink-secondary); font-size: 12px;">${authorDisplay}</span>
@@ -609,10 +664,19 @@ function renderManuscriptExplorer() {
           fragments.push(escapeHtml(text.slice(lastIdx, start)));
         }
 
-        // Append the grounded citation pill
-        const isSup = s.kind === 'sup';
+        // Append the grounded citation pill formatted for the target style
+        const targetStyle = appState.targetStyle || 'ama';
+        const styleInfo = CSL_STYLES[targetStyle] || CSL_STYLES['ama'];
+        const { references } = appState.parsedData;
+        const citedRefs = s.nums.map(n => references.find(r => r.ref_num === n)).filter(Boolean);
+        const displayNums = (appState.amaMapping && styleInfo.category === 'numeric')
+          ? s.nums.map(n => appState.amaMapping[n] || n)
+          : s.nums;
+        const inText = formatInTextForStyle(targetStyle, displayNums, citedRefs);
+        const pillText = inText.text || s.text;
+        const isSup = inText.isSuperscript;
         const supClass = isSup ? ' cit-sup' : '';
-        const pill = `<span class="cit-pill${supClass}" data-nums="${escapeHtml(s.nums.join(','))}" title="Cited references: ${escapeHtml(s.nums.join(', '))}">${escapeHtml(s.text)}</span>`;
+        const pill = `<span class="cit-pill${supClass}" data-nums="${escapeHtml(s.nums.join(','))}" title="Cited in ${styleInfo.name}: ${escapeHtml(pillText)}">${escapeHtml(pillText)}</span>`;
         fragments.push(pill);
         lastIdx = end;
       }
@@ -947,10 +1011,11 @@ if (btnDownloadTrackedDocx) {
   btnDownloadTrackedDocx.addEventListener('click', async () => {
     if (!appState.parsedData) return;
     try {
+      const targetStyle = appState.targetStyle || 'ama';
       btnDownloadTrackedDocx.textContent = '⏳ Generating Tracked Changes...';
-      const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, true, "Co-Scientist");
+      const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, true, "Co-Scientist", true, targetStyle);
       const baseName = appState.fileName.replace(/\.docx$/i, '');
-      downloadBlob(blob, `${baseName}_tracked_changes.docx`);
+      downloadBlob(blob, `${baseName}_${targetStyle}_tracked_changes.docx`);
       btnDownloadTrackedDocx.textContent = '📝 Download Tracked Changes (.docx)';
     } catch (err) {
       alert("Error generating Tracked Changes document: " + err.message);
@@ -962,10 +1027,11 @@ if (btnDownloadTrackedDocx) {
 btnDownloadDocx.addEventListener('click', async () => {
   if (!appState.parsedData) return;
   try {
+    const targetStyle = appState.targetStyle || 'ama';
     btnDownloadDocx.textContent = '⏳ Injecting & Re-ordering...';
-    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, false);
+    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, false, "Co-Scientist", true, targetStyle);
     const baseName = appState.fileName.replace(/\.docx$/i, '');
-    downloadBlob(blob, `${baseName}_zotero_linked.docx`);
+    downloadBlob(blob, `${baseName}_${targetStyle}_zotero_linked.docx`);
     btnDownloadDocx.textContent = '📄 Download Clean Linked (.docx)';
   } catch (err) {
     alert("Error generating linked Word document: " + err.message);

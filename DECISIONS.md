@@ -219,6 +219,44 @@
     - Paragraph 84: `"43.3%"` is pure text; citation `'3'` is correctly wrapped.
     - Total 33 citation pills rendered with 100% precision.
 
+### [2026-11-15 14:25] ARCH-DECISION-019: Dynamic CSL Citation Style Switching & Zotero Parity (AMA, Vancouver, IEEE, Nature, APA 7th, Harvard)
+- **Context**: User requested: *"can you also plan how can we have a refrence format change ? like in zotero??"*
+- **Technical Challenge & Zotero CSL Architecture**:
+  1. Zotero relies on Citation Style Language (CSL) specifications to transform citation representations across two fundamental paradigms:
+     - **Numeric Styles** (AMA 11th, Vancouver bracketed/parentheses, IEEE, Nature): In-text citations are superscript numbers or bracketed digits ($1 \dots N$). In-text citations and the reference list must be sequenced strictly by order of first appearance in the body text.
+     - **Author-Date Styles** (APA 7th, Harvard): In-text citations must transform from numeric tags to primary author family name + year (e.g. `(Topol, 2019)`, `(Rajpurkar & Irvin, 2017)`, `(Esteva et al., 2017)`). The bibliography must be sorted alphabetically ($A \dots Z$) by first author's surname, then year, then title, formatted with hanging indents (`<w:ind w:left="720" w:hanging="720"/>`).
+  2. Word Document OpenXML Preferences (`ADDIN ZOTERO_PREF_1`) must set the exact CSL `styleId` (e.g., `http://www.zotero.org/styles/apa`, `.../vancouver`) so the document is immediately recognized and editable by Word's native Zotero plugin ribbon.
+  3. In biomedical manuscripts, authors are formatted surname-first (`[Surname] [Given/Initials]` e.g. `Cuoco Joshua A.`, `Milewicz Dianna M.`, `van de Laar Ingrid M`). Parsers must correctly preserve multi-word surnames, surname particles (`van de`, `de`, `Mc`), and prevent single-letter initials from masquerading as family names.
+- **Decision & Implementation**:
+  1. **Dual CSL Formatting Engines (`static/js/csl_formatter.js` & `server/csl_formatter.py`)**:
+     - Built comprehensive CSL dictionaries supporting:
+       - `ama`: American Medical Association 11th edition (Superscript, Sequential)
+       - `vancouver-bracket`: Vancouver ([1, 2], Square Brackets)
+       - `vancouver-paren`: Vancouver ((1, 2), Parentheses)
+       - `ieee`: IEEE ([1], [2], Standard Engineering)
+       - `nature`: Nature (Superscript, Compact)
+       - `apa-7th`: APA 7th Edition ((Author, Year), Alphabetical)
+       - `harvard`: Harvard ((Author and Doe, Year), Alphabetical)
+     - Implemented `parseAuthorNames` / `parse_author_names` with full particle support (`van`, `von`, `de`, `del`, `Mc`) and NLM surname-first grammar.
+     - Implemented `formatInTextForStyle`, `formatBibliographyForStyle`, and `sortReferencesForStyle`.
+  2. **Word OpenXML Field Injection (`static/js/docx_engine.js` & `server/linker.py`)**:
+     - Injected `ADDIN ZOTERO_PREF_1` with exact target CSL URI.
+     - Dynamic OpenXML run formatting: superscripts for AMA/Nature, inline bracketed/parenthetical text for Vancouver/IEEE, and `(Author, Year)` for APA/Harvard.
+     - Injected APA hanging indents (`<w:ind w:left="720" w:hanging="720"/>`) for author-date bibliographies.
+     - Dual support for clean exports and tracked changes (`<w:del>` / `<w:ins>` attributed to `Co-Scientist`).
+  3. **Interactive UI Style Switcher (`index.html` & `static/js/app.js`)**:
+     - Added `#targetStyleSelect` dropdown and `#targetStyleBadge` in the Master Theme style bar.
+     - Instant dynamic re-rendering: switching styles instantly updates `#manuscriptViewer` pills, re-sorts `#referencesTableBody` rows, and updates download actions without reloading.
+- **Verification**:
+  - Python Unit Tests: Added `test_44_csl_style_switching_ama_vancouver_apa` to `tests/test_engine.py` (44/44 tests pass).
+  - Headless Chrome CDP Live Test: Empirically verified via `scripts/verify_csl_switching_live.py`:
+    - Loaded 43 references, 33 citation sites from `ACTA2_Manuscript_11.14.2026.docx`.
+    - Initial AMA pills verified as superscripts.
+    - Switched to APA 7th: pills updated to `(Milewicz et al., 2010)`, `(van de Laar, 2019)`, `(Munot & Saunders, 2012)`; reference table rows sorted alphabetically: `['amans', 'ardhanari', 'bieber', 'brodsky', 'chen']`. Clinical counts (`13 patients`) remained 100% immune.
+    - Switched to Vancouver: pills updated to `[1,2]`, `[3]`, `[2,4]`.
+    - Generated in-browser 1.4 MB APA `.docx`: OpenXML verified with `ADDIN ZOTERO_PREF_1` APA style, `ADDIN ZOTERO_BIBL`, and `w:hanging="720"`.
+
+
 
 
 

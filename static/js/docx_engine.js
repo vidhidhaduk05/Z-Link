@@ -3,6 +3,13 @@
  * Powered by JSZip & browser native XML DOMParser
  */
 
+import {
+  CSL_STYLES,
+  formatInTextForStyle,
+  formatBibliographyForStyle,
+  sortReferencesForStyle
+} from './csl_formatter.js';
+
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const DEFAULT_STYLE = "http://www.zotero.org/styles/american-medical-association";
 const DEFAULT_STYLE_NAME = "American Medical Association 11th edition";
@@ -905,15 +912,20 @@ export async function injectZoteroFieldsInBrowser(
   renumberAma = true,
   trackChanges = false,
   author = "Co-Scientist",
-  includeAuditLedger = true
+  includeAuditLedger = true,
+  targetStyle = "ama"
 ) {
   const { zip, xmlDoc, paragraphs, sites, references } = parsedData;
   let revCounter = 1;
   const dateStr = new Date().toISOString();
 
-  // Determine AMA sequential re-numbering map
+  const styleInfo = CSL_STYLES[targetStyle] || CSL_STYLES["ama"];
+  const styleId = styleInfo.id;
+  const styleName = styleInfo.name;
+
+  // Determine sequential re-numbering map
   let mapping = {};
-  if (renumberAma) {
+  if (renumberAma || styleInfo.category === "numeric") {
     const res = buildAmaRenumberingMap(references, sites);
     mapping = res.mapping;
   } else {
@@ -956,30 +968,39 @@ export async function injectZoteroFieldsInBrowser(
     if (site.run_idx >= runs.length) continue;
     const targetRun = runs[site.run_idx];
 
-    // Ensure run has superscript formatting
+    // Format new numbers / author-date with target style
+    const newSiteNums = Array.from(new Set(site.nums.map(n => mapping[n] || n))).sort((a,b) => a - b);
+    const citedRefs = site.nums.map(n => references.find(r => r.ref_num === n)).filter(Boolean);
+    const inText = formatInTextForStyle(targetStyle, newSiteNums, citedRefs);
+    const targetCitStr = inText.text || site.text;
+    const isSup = inText.isSuperscript;
+
     let rPr = targetRun.getElementsByTagNameNS(W_NS, "rPr")[0];
     if (!rPr) {
       rPr = xmlDoc.createElementNS(W_NS, "w:rPr");
       targetRun.insertBefore(rPr, targetRun.firstChild);
     }
     let va = rPr.getElementsByTagNameNS(W_NS, "vertAlign")[0];
-    if (!va) {
-      va = xmlDoc.createElementNS(W_NS, "w:vertAlign");
-      va.setAttributeNS(W_NS, "w:val", "superscript");
-      rPr.appendChild(va);
+    if (isSup) {
+      if (!va) {
+        va = xmlDoc.createElementNS(W_NS, "w:vertAlign");
+        va.setAttributeNS(W_NS, "w:val", "superscript");
+        rPr.appendChild(va);
+      } else {
+        va.setAttributeNS(W_NS, "w:val", "superscript");
+      }
+    } else if (va) {
+      va.setAttributeNS(W_NS, "w:val", "baseline");
     }
 
-    // Format new numbers with AMA range condensation
-    const newSiteNums = Array.from(new Set(site.nums.map(n => mapping[n] || n))).sort((a,b) => a - b);
-    const condensedStr = formatCondensedCitation(newSiteNums);
     const tNodes = targetRun.getElementsByTagNameNS(W_NS, "t");
     const oldText = (tNodes.length > 0) ? tNodes[0].textContent : site.text;
 
     let targetAnchor = targetRun;
 
-    if (trackChanges && oldText !== condensedStr) {
+    if (trackChanges && oldText !== targetCitStr) {
       const delEl = createDelRun(xmlDoc, oldText, revCounter++, author, dateStr, site.kind === "sup");
-      const insEl = createInsRun(xmlDoc, condensedStr, revCounter++, author, dateStr, true);
+      const insEl = createInsRun(xmlDoc, targetCitStr, revCounter++, author, dateStr, isSup);
       const runParent = targetRun.parentNode || p;
       runParent.insertBefore(delEl, targetRun);
       runParent.insertBefore(insEl, targetRun);
@@ -987,7 +1008,7 @@ export async function injectZoteroFieldsInBrowser(
       targetAnchor = insEl;
     } else {
       if (tNodes.length > 0) {
-        tNodes[0].textContent = condensedStr;
+        tNodes[0].textContent = targetCitStr;
       }
     }
 
@@ -1000,8 +1021,8 @@ export async function injectZoteroFieldsInBrowser(
     const citationJson = {
       citationID: Math.random().toString(36).substring(2, 10),
       properties: {
-        formattedCitation: condensedStr,
-        plainCitation: condensedStr,
+        formattedCitation: targetCitStr,
+        plainCitation: targetCitStr,
         noteIndex: 0
       },
       citationItems: citationItems,
@@ -1210,8 +1231,19 @@ export async function injectZoteroFieldsInBrowser(
 
     // Reorder atomic reference blocks in the document DOM
     let sortedBlocks = blocks;
-    if (renumberAma && blocks.length > 1) {
+    if (styleInfo.sort === "alphabetical") {
+      sortedBlocks = [...blocks].sort((a, b) => {
+        const refA = (references || []).find(r => r.ref_num === a.oldN);
+        const refB = (references || []).find(r => r.ref_num === b.oldN);
+        const authA = (refA?.authors?.[0] || a.rest || "").toLowerCase();
+        const authB = (refB?.authors?.[0] || b.rest || "").toLowerCase();
+        return authA.localeCompare(authB);
+      });
+    } else if (renumberAma && blocks.length > 1) {
       sortedBlocks = [...blocks].sort((a, b) => a.newN - b.newN);
+    }
+
+    if (blocks.length > 0) {
       let currAnchor = null;
       let parentNode = null;
 
@@ -1224,7 +1256,50 @@ export async function injectZoteroFieldsInBrowser(
       }
 
       if (parentNode) {
-        sortedBlocks.forEach(b => {
+        sortedBlocks.forEach((b, sIdx) => {
+          // Reformat bibliography entry for target style if not AMA
+          if (targetStyle !== "ama") {
+            const refObj = (references || []).find(r => r.ref_num === b.oldN);
+            if (refObj) {
+              const formattedLine = formatBibliographyForStyle(targetStyle, sIdx + 1, refObj);
+              const oldFull = Array.from(b.primaryP.getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("");
+              if (trackChanges && oldFull.trim() !== formattedLine.trim()) {
+                const delEl = createDelRun(xmlDoc, oldFull, revCounter++, author, dateStr);
+                const insEl = createInsRun(xmlDoc, formattedLine, revCounter++, author, dateStr);
+                const pPr = b.primaryP.getElementsByTagNameNS(W_NS, "pPr")[0];
+                Array.from(b.primaryP.getElementsByTagNameNS(W_NS, "r")).forEach(r => b.primaryP.removeChild(r));
+                if (pPr && pPr.nextSibling) {
+                  b.primaryP.insertBefore(delEl, pPr.nextSibling);
+                  b.primaryP.insertBefore(insEl, delEl.nextSibling);
+                } else {
+                  b.primaryP.appendChild(delEl);
+                  b.primaryP.appendChild(insEl);
+                }
+              } else {
+                const tNodes = Array.from(b.primaryP.getElementsByTagNameNS(W_NS, "t"));
+                if (tNodes.length > 0) {
+                  tNodes[0].textContent = formattedLine;
+                  for (let ti = 1; ti < tNodes.length; ti++) tNodes[ti].textContent = "";
+                }
+              }
+            }
+
+            if (targetStyle === "apa-7th") {
+              let pPr = b.primaryP.getElementsByTagNameNS(W_NS, "pPr")[0];
+              if (!pPr) {
+                pPr = xmlDoc.createElementNS(W_NS, "w:pPr");
+                b.primaryP.insertBefore(pPr, b.primaryP.firstChild);
+              }
+              let ind = pPr.getElementsByTagNameNS(W_NS, "ind")[0];
+              if (!ind) {
+                ind = xmlDoc.createElementNS(W_NS, "w:ind");
+                pPr.appendChild(ind);
+              }
+              ind.setAttributeNS(W_NS, "w:left", "720");
+              ind.setAttributeNS(W_NS, "w:hanging", "720");
+            }
+          }
+
           b.paragraphs.forEach(bp => {
             if (currAnchor) {
               parentNode.insertBefore(bp, currAnchor.nextSibling);
@@ -1254,7 +1329,7 @@ export async function injectZoteroFieldsInBrowser(
       bibHeaderP.appendChild(bSep);
 
       // Locate last reference paragraph
-      const lastBlock = (renumberAma && sortedBlocks.length > 0) ? sortedBlocks[sortedBlocks.length - 1] : blocks[blocks.length - 1];
+      const lastBlock = (sortedBlocks.length > 0) ? sortedBlocks[sortedBlocks.length - 1] : blocks[blocks.length - 1];
       const lastRefP = lastBlock ? lastBlock.paragraphs[lastBlock.paragraphs.length - 1] : null;
 
       if (lastRefP) {
@@ -1277,10 +1352,10 @@ export async function injectZoteroFieldsInBrowser(
     }
   }
 
-  // Document Preferences (AMA 11th edition)
+  // Document Preferences with selected CSL style
   const prefs = {
-    styleName: DEFAULT_STYLE_NAME,
-    styleId: DEFAULT_STYLE,
+    styleName: styleName,
+    styleId: styleId,
     locale: "en-US",
     libraryID: 1,
     templateVersion: 1,

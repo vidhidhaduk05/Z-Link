@@ -181,6 +181,37 @@
         </div>
       </div>
 
+      <!-- Target Citation Style Switcher (Zotero-Compatible CSL Engine) -->
+      <div class="style-switcher-bar" style="margin-top: 20px; padding: 14px 18px; background: #ffffff; border: 1.5px solid var(--editorial-plum); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; box-shadow: 0 2px 8px rgba(58, 15, 52, 0.04);">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="font-size: 22px;">🔄</span>
+          <div>
+            <div style="font-weight: 700; font-size: 14px; color: var(--primary-wine);">
+              Target Citation Style (Zotero CSL Switcher)
+            </div>
+            <div style="font-size: 11px; color: var(--reading-ink-secondary);">
+              Re-formats in-text citations, re-sorts bibliography, and updates native Word Zotero fields
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <select id="targetStyleSelect" style="padding: 8px 14px; border: 1px solid var(--border-outline); border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: 13px; color: var(--reading-ink-primary); background: #fff; min-width: 280px; cursor: pointer; font-weight: 600;">
+            <optgroup label="Numeric Styles">
+              <option value="ama" selected>AMA 11th Edition (Superscript, Sequential)</option>
+              <option value="vancouver-bracket">Vancouver (Square Brackets [1, 2])</option>
+              <option value="vancouver-paren">Vancouver (Parentheses (1, 2))</option>
+              <option value="ieee">IEEE ([1], [2], Standard Engineering)</option>
+              <option value="nature">Nature (Superscript, Author-First Compact)</option>
+            </optgroup>
+            <optgroup label="Author-Date Styles">
+              <option value="apa-7th">APA 7th Edition ((Author, Year), Alphabetical)</option>
+              <option value="harvard">Harvard ((Author &amp; Doe 2020), Alphabetical)</option>
+            </optgroup>
+          </select>
+          <span id="targetStyleBadge" class="badge-reach reachable" style="font-size: 11px;">Active: AMA 11th</span>
+        </div>
+      </div>
+
       <!-- Reference Audit Table -->
       <div class="editorial-card" style="margin-top: 28px;">
         <div class="card-header">

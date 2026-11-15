@@ -15,6 +15,13 @@ from docx.oxml import parse_xml, OxmlElement
 from docx.oxml.ns import nsdecls, qn
 from lxml import etree
 from server.models import CitationSite, ReferenceEntry, ValidationVerdict
+from server.csl_formatter import (
+    CSL_STYLES,
+    parse_author_names,
+    format_in_text_for_style,
+    format_bibliography_for_style,
+    sort_references_for_style
+)
 
 DEFAULT_STYLE = "http://www.zotero.org/styles/american-medical-association"
 DEFAULT_STYLE_NAME = "American Medical Association 11th edition"
@@ -619,7 +626,8 @@ def link_docx_manuscript(
     track_changes: bool = False,
     author: str = "Co-Scientist",
     mappings: Optional[Dict[int, Any]] = None,
-    include_audit_ledger: bool = False
+    include_audit_ledger: bool = False,
+    target_style: str = "ama"
 ) -> Union[str, BytesIO]:
     """
     Transforms the docx by injecting native Zotero field codes.
@@ -627,18 +635,23 @@ def link_docx_manuscript(
     and re-orders the bibliography paragraphs accordingly.
     When track_changes is True, records all modifications using native OpenXML <w:del> and <w:ins>
     tags attributed to author, enabling Word's revision tracking mode.
+    Supports dynamic CSL target style formatting across AMA, Vancouver, IEEE, Nature, and APA 7th.
     """
     doc = docx.Document(docx_input)
     ref_by_num = {r.ref_num: r for r in references}
     tracker = RevisionTracker(author=author) if track_changes else None
+
+    style_info = CSL_STYLES.get(target_style, CSL_STYLES["ama"])
+    style_id = style_info["id"]
+    style_name = style_info["name"]
 
     if track_changes:
         settings_el = doc.settings._element
         if settings_el.find(qn('w:trackRevisions')) is None:
             settings_el.append(etree.Element(qn('w:trackRevisions')))
 
-    # Compute AMA sequential re-numbering permutation map
-    if renumber_ama:
+    # Compute sequential re-numbering permutation map
+    if renumber_ama or style_info["category"] == "numeric":
         mapping, first_seen_order, uncited = build_ama_renumbering_map(references, sites)
     else:
         mapping = {r.ref_num: r.ref_num for r in references}
@@ -659,16 +672,19 @@ def link_docx_manuscript(
             continue
         p = doc.paragraphs[s.paragraph_idx]
 
-        # Calculate new numbers and AMA condensed representation
+        # Calculate new numbers and format for target style
         new_site_nums = sorted(list(set(mapping.get(n, n) for n in s.nums)))
-        condensed_str = format_condensed_citation(new_site_nums)
+        cited_entries = [ref_by_num[n] for n in s.nums if n in ref_by_num]
+        in_text_res = format_in_text_for_style(target_style, new_site_nums, cited_entries)
+        formatted_str = in_text_res["text"]
+        is_sup = in_text_res["is_superscript"]
 
         active_runs = [docx.text.run.Run(r_el, p) for r_el in p._p.xpath('.//w:r[not(ancestor::w:del)]')]
         if s.kind in ('paren', 'bracket') and s.match_start is not None and s.match_end is not None:
             if s.run_idx < len(active_runs):
                 sup_el = convert_paren_site(
                     p, s.run_idx, s.match_start, s.match_end,
-                    formatted_text=condensed_str,
+                    formatted_text=formatted_str,
                     track_changes=track_changes,
                     tracker=tracker,
                     model_run=active_runs[s.run_idx]
@@ -679,9 +695,9 @@ def link_docx_manuscript(
             sup_run = active_runs[s.run_idx]
             if track_changes and tracker:
                 old_text = sup_run.text
-                if old_text != condensed_str:
-                    del_el = make_del_element(old_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=sup_run)
-                    ins_el = make_ins_element(condensed_str, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=sup_run)
+                if old_text != formatted_str:
+                    del_el = make_del_element(old_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=s.kind == "sup", model_run=sup_run)
+                    ins_el = make_ins_element(formatted_str, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=is_sup, model_run=sup_run)
                     
                     parent = sup_run._r.getparent()
                     if parent is not None and parent.tag == qn('w:ins'):
@@ -709,7 +725,8 @@ def link_docx_manuscript(
                     sup_el = sup_run._r
             else:
                 sup_el = sup_run._r
-                sup_run.text = condensed_str
+                sup_run.text = formatted_str
+                sup_run.font.superscript = is_sup
         else:
             continue
 
@@ -726,8 +743,8 @@ def link_docx_manuscript(
         citation_json = {
             "citationID": ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
             "properties": {
-                "formattedCitation": condensed_str,
-                "plainCitation": condensed_str,
+                "formattedCitation": formatted_str,
+                "plainCitation": formatted_str,
                 "noteIndex": 0
             },
             "citationItems": citation_items,
@@ -848,9 +865,55 @@ def link_docx_manuscript(
                 if recovered_doi:
                     b.paragraphs[-1].add_run(f" {recovered_doi}")
 
-        # Re-order the atomic reference blocks in the document XML according to new_n
-        if renumber_ama and len(blocks) > 1:
+        # Re-order the atomic reference blocks in the document XML according to target style
+        if style_info["sort"] == "alphabetical":
+            def sort_key(item):
+                ref_e = ref_by_num.get(item.old_n)
+                parsed = parse_author_names(ref_e.authors) if ref_e else []
+                fam = parsed[0]["family"].lower() if parsed else item.rest.lower()
+                yr = int(ref_e.year) if (ref_e and ref_e.year and ref_e.year.isdigit()) else 0
+                return (fam, yr)
+            sorted_blocks = sorted(blocks, key=sort_key)
+        elif renumber_ama and len(blocks) > 1:
             sorted_blocks = sorted(blocks, key=lambda item: item.new_n)
+        else:
+            sorted_blocks = blocks
+
+        if target_style != "ama":
+            for s_idx, b in enumerate(sorted_blocks):
+                ref_e = ref_by_num.get(b.old_n)
+                if ref_e:
+                    formatted_line = format_bibliography_for_style(target_style, s_idx + 1, ref_e)
+                    if track_changes and tracker:
+                        old_txt = b.primary_para.text
+                        if old_txt.strip() != formatted_line.strip():
+                            del_el = make_del_element(old_txt, tracker.next_id(), tracker.author, tracker.date_str)
+                            ins_el = make_ins_element(formatted_line, tracker.next_id(), tracker.author, tracker.date_str)
+                            pPr = b.primary_para._p.find(qn('w:pPr'))
+                            for r_el in b.primary_para._p.findall(qn('w:r')):
+                                b.primary_para._p.remove(r_el)
+                            if pPr is not None:
+                                pPr.addnext(ins_el)
+                                pPr.addnext(del_el)
+                            else:
+                                b.primary_para._p.insert(0, ins_el)
+                                b.primary_para._p.insert(0, del_el)
+                    else:
+                        b.primary_para.text = formatted_line
+
+                if target_style == "apa-7th":
+                    pPr = b.primary_para._p.find(qn('w:pPr'))
+                    if pPr is None:
+                        pPr = etree.Element(qn('w:pPr'))
+                        b.primary_para._p.insert(0, pPr)
+                    ind = pPr.find(qn('w:ind'))
+                    if ind is None:
+                        ind = etree.Element(qn('w:ind'))
+                        pPr.append(ind)
+                    ind.set(qn('w:left'), '720')
+                    ind.set(qn('w:hanging'), '720')
+
+        if len(blocks) > 0:
             # Find the anchor element immediately preceding the reference section
             if header_idx is not None and header_idx < len(doc.paragraphs):
                 anchor_el = doc.paragraphs[header_idx]._p
@@ -873,7 +936,7 @@ def link_docx_manuscript(
         # Inject authentic multi-paragraph bibliography field enclosing all reference blocks
         # Active in BOTH clean mode and track_changes mode
         last_ref_para = None
-        if renumber_ama and len(blocks) > 1:
+        if sorted_blocks:
             last_ref_para = sorted_blocks[-1].paragraphs[-1]
         elif blocks:
             last_ref_para = blocks[-1].paragraphs[-1]
@@ -887,8 +950,8 @@ def link_docx_manuscript(
     if include_audit_ledger and references:
         append_audit_ledger_to_docx(doc, references, verdicts, mappings, mapping)
 
-    # Inject AMA doc prefs
-    inject_doc_prefs(doc, DEFAULT_STYLE, DEFAULT_STYLE_NAME, library_id=1)
+    # Inject document preferences with active target style
+    inject_doc_prefs(doc, style_id=style_id, style_name=style_name, library_id=1)
 
     target = output_target or BytesIO()
     doc.save(target)

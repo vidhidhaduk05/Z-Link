@@ -1313,6 +1313,161 @@ class TestZoteroLinkEngine(unittest.TestCase):
         p84_html = render_preview_paragraph(p84_text, p84_sites)
         self.assertIn("43.3%", p84_html, "P84 must contain '43.3%' as plain text")
 
+    def test_44_csl_style_switching_ama_vancouver_apa(self):
+        """
+        Verify multi-style CSL formatting and Word document generation:
+        1. Pure CSL formatting parity for AMA, Vancouver, IEEE, Nature, APA 7th, Harvard
+        2. Clean and tracked changes Word document linking in Vancouver bracket style [1, 2]
+        3. Clean and tracked changes Word document linking in APA 7th author-date style (Smith et al., 2020)
+        4. Validation of ADDIN ZOTERO_PREF_1 style IDs and hanging indents for APA.
+        """
+        from server.csl_formatter import (
+            CSL_STYLES,
+            format_in_text_for_style,
+            format_bibliography_for_style,
+            sort_references_for_style
+        )
+
+        # 1. Test In-Text Formatters
+        ref_mock_1 = ReferenceEntry(
+            ref_num=1,
+            raw_text="Topol EJ. High-performance medicine: the convergence of human and artificial intelligence. Nat Med. 2019;25(1):44-56.",
+            title="High-performance medicine: the convergence of human and artificial intelligence",
+            authors=["Topol EJ"],
+            journal="Nat Med",
+            year="2019",
+            doi="10.1038/s41591-018-0300-7"
+        )
+        ref_mock_2 = ReferenceEntry(
+            ref_num=2,
+            raw_text="Esteva A, Kuprel B, Novoa RA. Dermatologist-level classification of skin cancer with deep neural networks. Nature. 2017;542(7639):115-118.",
+            title="Dermatologist-level classification of skin cancer with deep neural networks",
+            authors=["Esteva A", "Kuprel B", "Novoa RA"],
+            journal="Nature",
+            year="2017",
+            doi="10.1038/nature21056"
+        )
+        ref_mock_3 = ReferenceEntry(
+            ref_num=3,
+            raw_text="Rajpurkar P, Irvin J. CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays with Deep Learning. arXiv. 2017.",
+            title="CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays with Deep Learning",
+            authors=["Rajpurkar P", "Irvin J"],
+            journal="arXiv",
+            year="2017",
+            doi=""
+        )
+
+        # AMA
+        ama_in = format_in_text_for_style("ama", [1, 2], [ref_mock_1, ref_mock_2])
+        self.assertEqual(ama_in["text"], "1,2")
+        self.assertTrue(ama_in["is_superscript"])
+
+        # Vancouver Bracket
+        vanc_in = format_in_text_for_style("vancouver-bracket", [1, 2], [ref_mock_1, ref_mock_2])
+        self.assertEqual(vanc_in["text"], "[1,2]")
+        self.assertFalse(vanc_in["is_superscript"])
+
+        # IEEE
+        ieee_in = format_in_text_for_style("ieee", [1, 2], [ref_mock_1, ref_mock_2])
+        self.assertEqual(ieee_in["text"], "[1], [2]")
+        self.assertFalse(ieee_in["is_superscript"])
+
+        # APA 7th (2 authors uses &, 3+ uses et al.)
+        apa_single = format_in_text_for_style("apa-7th", [1], [ref_mock_1])
+        self.assertEqual(apa_single["text"], "(Topol, 2019)")
+
+        apa_two = format_in_text_for_style("apa-7th", [3], [ref_mock_3])
+        self.assertEqual(apa_two["text"], "(Rajpurkar & Irvin, 2017)")
+
+        apa_three = format_in_text_for_style("apa-7th", [2], [ref_mock_2])
+        self.assertEqual(apa_three["text"], "(Esteva et al., 2017)")
+
+        apa_multi = format_in_text_for_style("apa-7th", [1, 2], [ref_mock_1, ref_mock_2])
+        self.assertEqual(apa_multi["text"], "(Topol, 2019; Esteva et al., 2017)")
+
+        # Harvard (2 authors uses 'and')
+        harv_two = format_in_text_for_style("harvard", [3], [ref_mock_3])
+        self.assertEqual(harv_two["text"], "(Rajpurkar and Irvin, 2017)")
+
+        # 2. Test Sorting: APA must sort alphabetically
+        unsorted = [ref_mock_1, ref_mock_2, ref_mock_3] # Topol (T), Esteva (E), Rajpurkar (R)
+        sorted_apa = sort_references_for_style("apa-7th", unsorted, {})
+        self.assertEqual([r.authors[0].split()[0] for r in sorted_apa], ["Esteva", "Rajpurkar", "Topol"])
+
+        # 3. Test Word Document Generation with Vancouver Bracket
+        paras, sites, references = parse_docx_manuscript(self.docx_file)
+        vanc_out = BytesIO()
+        link_docx_manuscript(
+            self.docx_file,
+            sites,
+            references,
+            output_target=vanc_out,
+            renumber_ama=True,
+            track_changes=False,
+            target_style="vancouver-bracket"
+        )
+        vanc_docx_bytes = vanc_out.getvalue()
+        self.assertGreater(len(vanc_docx_bytes), 1000)
+        
+        doc_vanc = docx.Document(BytesIO(vanc_docx_bytes))
+        doc_vanc_xml = doc_vanc._part._element.xml
+        self.assertIn("vancouver", doc_vanc_xml, "Docx must set Zotero pref style to Vancouver")
+        self.assertIn("ADDIN ZOTERO_BIBL", doc_vanc_xml, "Docx must contain ZOTERO_BIBL")
+        self.assertIn("[1]", doc_vanc_xml, "Docx must contain bracketed in-text citation [1]")
+
+        # 4. Test Word Document Generation with APA 7th
+        apa_out = BytesIO()
+        link_docx_manuscript(
+            self.docx_file,
+            sites,
+            references,
+            output_target=apa_out,
+            renumber_ama=False,
+            track_changes=False,
+            target_style="apa-7th"
+        )
+        apa_docx_bytes = apa_out.getvalue()
+        self.assertGreater(len(apa_docx_bytes), 1000)
+        
+        doc_apa = docx.Document(BytesIO(apa_docx_bytes))
+        doc_apa_xml = doc_apa._part._element.xml
+        self.assertIn("apa", doc_apa_xml, "Docx must set Zotero pref style to APA")
+        self.assertIn("ADDIN ZOTERO_BIBL", doc_apa_xml, "Docx must contain ZOTERO_BIBL")
+        # Check hanging indent w:ind w:left="720" w:hanging="720"
+        self.assertIn('w:hanging="720"', doc_apa_xml, "APA bibliography entries must have hanging indents")
+
+        # 5. Test Tracked Changes with Vancouver Bracket
+        vanc_tc_out = BytesIO()
+        link_docx_manuscript(
+            self.docx_file,
+            sites,
+            references,
+            output_target=vanc_tc_out,
+            renumber_ama=True,
+            track_changes=True,
+            target_style="vancouver-bracket"
+        )
+        vanc_tc_xml = docx.Document(BytesIO(vanc_tc_out.getvalue()))._part._element.xml
+        self.assertIn("<w:del", vanc_tc_xml, "Tracked changes mode must emit <w:del>")
+        self.assertIn("<w:ins", vanc_tc_xml, "Tracked changes mode must emit <w:ins>")
+        self.assertIn("vancouver", vanc_tc_xml, "Must retain Vancouver target style in tracked changes")
+
+        # 6. Test Tracked Changes with APA 7th
+        apa_tc_out = BytesIO()
+        link_docx_manuscript(
+            self.docx_file,
+            sites,
+            references,
+            output_target=apa_tc_out,
+            renumber_ama=False,
+            track_changes=True,
+            target_style="apa-7th"
+        )
+        apa_tc_xml = docx.Document(BytesIO(apa_tc_out.getvalue()))._part._element.xml
+        self.assertIn("<w:del", apa_tc_xml, "APA Tracked changes mode must emit <w:del>")
+        self.assertIn("<w:ins", apa_tc_xml, "APA Tracked changes mode must emit <w:ins>")
+        self.assertIn("apa", apa_tc_xml, "Must retain APA target style in tracked changes")
+
 if __name__ == "__main__":
     unittest.main()
 
