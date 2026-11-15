@@ -155,7 +155,9 @@ async function queryOpenAlex(cleanDoi) {
 }
 
 /**
- * Compute word overlap similarity between reference title and registry title
+ * Compute word overlap similarity between reference title and registry title.
+ * Combines Dice coefficient with containment ratio so that matching titles with long subtitles
+ * are not falsely rejected.
  */
 function computeTitleSimilarity(targetTitle, candidateTitle) {
   if (!targetTitle || !candidateTitle) return 0;
@@ -164,8 +166,13 @@ function computeTitleSimilarity(targetTitle, candidateTitle) {
   if (tWords.size === 0 || cWords.size === 0) return 0;
   let common = 0;
   tWords.forEach(w => { if (cWords.has(w)) common++; });
-  const union = new Set([...tWords, ...cWords]);
-  return common / union.size;
+  if (common === 0) return 0;
+  const dice = (2 * common) / (tWords.size + cWords.size);
+  const containment = common / Math.min(tWords.size, cWords.size);
+  if (containment >= 0.8) {
+    return Math.max(dice, containment * 0.9);
+  }
+  return dice;
 }
 
 /**

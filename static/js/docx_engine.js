@@ -15,9 +15,10 @@ const DEFAULT_STYLE = "http://www.zotero.org/styles/american-medical-association
 const DEFAULT_STYLE_NAME = "American Medical Association 11th edition";
 const CSL_SCHEMA = "https://github.com/citation-style-language/schema/raw/master/csl-citation.json";
 
-const PAREN_REGEX = /\(((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)\)/g;
-const BRACKET_REGEX = /\[((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)]/g;
-const REF_START_REGEX = /^(\d{1,3})\.\s+(.*)$/;
+const PAREN_REGEX = /\(((?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?))*)\)/g;
+const BRACKET_REGEX = /\[((?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?))*)]/g;
+const SUP_CHAR_REGEX = /^[\d,\s\-–—−]+$/;
+const REF_START_REGEX = /^\s*[\(\[]?(\d{1,3})[\)\]\.)]\.?\s*(.*)$/;
 const REF_HEADER_REGEX = /^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$/i;
 const BODY_START_REGEX = /^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|BACKGROUND|Key Results)\s*$/i;
 const POST_REF_HEADER_REGEX = /^(Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)/i;
@@ -136,6 +137,17 @@ function extractSurroundingSentence(paraText, matchStart, matchEnd) {
   return paraText.slice(0, 140).trim();
 }
 
+export function cleanDoi(raw) {
+  if (!raw) return "";
+  const d = String(raw).trim();
+  const m = d.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
+            d.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
+  if (m) {
+    return m[1].replace(/^[<"'[(]+/, '').replace(/[.,;)\]>'"`]+$/, '');
+  }
+  return "";
+}
+
 function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
   let supCount = 0;
   let bracketCount = 0;
@@ -144,15 +156,24 @@ function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
   for (let pi = 0; pi < Math.min(scanEnd, paragraphs.length); pi++) {
     const pEl = paragraphs[pi];
     const runs = Array.from(pEl.getElementsByTagNameNS(W_NS, "r"));
-    let combined = "";
+    const spans = [];
     for (let ri = 0; ri < runs.length; ri++) {
       const r = runs[ri];
       const rText = Array.from(r.getElementsByTagNameNS(W_NS, "t")).map(t => t.textContent).join("");
       const rPr = r.getElementsByTagNameNS(W_NS, "rPr")[0];
       const va = rPr ? rPr.getElementsByTagNameNS(W_NS, "vertAlign")[0] : null;
       const isSup = va && va.getAttributeNS(W_NS, "val") === "superscript";
-
-      if (isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
+      const canCoalesce = spans.length > 0 && spans[spans.length - 1].isSup === isSup && (!isSup || (SUP_CHAR_REGEX.test(spans[spans.length - 1].text) && SUP_CHAR_REGEX.test(rText)));
+      if (canCoalesce) {
+        spans[spans.length - 1].text += rText;
+      } else {
+        spans.push({ text: rText, isSup: isSup });
+      }
+    }
+    let combined = "";
+    for (const span of spans) {
+      const rText = span.text;
+      if (span.isSup && /^\d{1,3}(?:[,-–—−]\d{1,3})*$/.test(rText)) {
         const prevChar = combined.slice(-1);
         const lowerPrev = combined.trim().toLowerCase();
         const isExpWord = EXPONENT_WORDS.some(w => lowerPrev.endsWith(w));
@@ -175,7 +196,7 @@ function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
       const prior = pText.slice(0, bm.index).trim();
       if (NON_CITATION_PRECEDING_WORDS.test(prior) || CLINICAL_SCALE_REGEX.test(prior.slice(-60))) continue;
       if (NON_CITATION_INNER_CONTENT.test(bm[0].slice(1, -1))) continue;
-      const inner = bm[1].replace(/–/g, '-');
+      const inner = bm[1].replace(/[–—−]/g, '-');
       const parts = inner.split(/\s*,\s*/).filter(Boolean);
       if (parts.length > 0 && parts.every(p => /^\d{1,3}(?:-\d{1,3})?$/.test(p))) {
         if (parts.some(pt => parseInt(pt.split('-')[0], 10) >= 1900)) continue;
@@ -189,7 +210,7 @@ function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
       const prior = pText.slice(0, pm.index).trim();
       if (NON_CITATION_PRECEDING_WORDS.test(prior) || CLINICAL_SCALE_REGEX.test(prior.slice(-60))) continue;
       if (NON_CITATION_INNER_CONTENT.test(pm[0].slice(1, -1))) continue;
-      const inner = pm[1].replace(/–/g, '-');
+      const inner = pm[1].replace(/[–—−]/g, '-');
       const parts = inner.split(/\s*,\s*/).filter(Boolean);
       if (parts.length > 0 && parts.every(p => /^\d{1,3}(?:-\d{1,3})?$/.test(p))) {
         if (parts.some(pt => parseInt(pt.split('-')[0], 10) >= 1900)) continue;
@@ -199,16 +220,7 @@ function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
   }
 
   // Dominant format determination
-  if (supCount >= 3 && supCount >= bracketCount && (parenCount === 0 || supCount >= 2 * parenCount)) {
-    return "sup";
-  }
-  if (bracketCount >= 3 && bracketCount >= parenCount) {
-    return "bracket";
-  }
-  if (parenCount >= 3 && supCount === 0 && bracketCount === 0) {
-    return "paren";
-  }
-  if (supCount >= 2 && parenCount >= 2) {
+  if ((supCount > 0 && bracketCount > 0) || (supCount > 0 && parenCount > 0) || (bracketCount > 0 && parenCount > 0)) {
     return "mixed";
   }
   if (supCount > 0) return "sup";
@@ -262,8 +274,19 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   const paragraphs = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
 
   const paraTexts = paragraphs.map(p => {
-    const textNodes = p.getElementsByTagNameNS(W_NS, "t");
-    return Array.from(textNodes).map(t => t.textContent).join("");
+    const runs = Array.from(p.getElementsByTagNameNS(W_NS, "r")).filter(r => !r.closest("w\\:del, del"));
+    return runs.map(r => {
+      let rText = "";
+      for (let ci = 0; ci < r.childNodes.length; ci++) {
+        const child = r.childNodes[ci];
+        if (child.localName === "t") {
+          rText += child.textContent || "";
+        } else if (child.localName === "br") {
+          rText += "\n";
+        }
+      }
+      return rText;
+    }).join("");
   });
 
   // 1. Identify reference section
@@ -281,66 +304,66 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   const references = [];
   const startRef = (refHdrIdx !== -1) ? refHdrIdx : 0;
   for (let i = startRef; i < paraTexts.length; i++) {
-    const line = paraTexts[i].trim();
-    if (!line) continue;
+    const rawPara = paraTexts[i].trim();
+    if (!rawPara) continue;
     // Stop if a post-reference section begins (e.g. Supplementary, Figures, Tables)
-    if (refHdrIdx !== -1 && i > refHdrIdx && POST_REF_HEADER_REGEX.test(line) && references.length > 0) {
+    if (refHdrIdx !== -1 && i > refHdrIdx && POST_REF_HEADER_REGEX.test(rawPara) && references.length > 0) {
       break;
     }
-    const m = line.match(REF_START_REGEX);
-    if (m) {
-      const refNum = parseInt(m[1], 10);
-      const content = m[2];
-      if (isLikelyReferenceLine(content) || (i + 1 < paraTexts.length && (REF_START_REGEX.test(paraTexts[i+1].trim()) && isLikelyReferenceLine(paraTexts[i+1].trim())))) {
-        const doiM = content.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
-                     content.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
-        const doi = doiM ? doiM[1].replace(/[.,;)]+$/, '') : "";
+    const subLines = rawPara.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    for (const line of subLines) {
+      const m = line.match(REF_START_REGEX);
+      if (m) {
+        const refNum = parseInt(m[1], 10);
+        const content = m[2];
+        if (isLikelyReferenceLine(content) || (i + 1 < paraTexts.length && (REF_START_REGEX.test(paraTexts[i+1].trim()) && isLikelyReferenceLine(paraTexts[i+1].trim())))) {
+          const doi = cleanDoi(content);
 
-        const parts = content.split(". ");
-        const authors = parts.length > 0 ? parts[0].split(/,| and /).map(a => a.trim()).filter(Boolean) : [];
-        const title = parts.length > 1 ? parts[1].trim() : "";
+          const parts = content.split(". ");
+          const authors = parts.length > 0 ? parts[0].split(/,| and /).map(a => a.trim()).filter(Boolean) : [];
+          const title = parts.length > 1 ? parts[1].trim() : "";
 
-        let journal = "";
-        let journalAbbr = "";
-        const lowerLine = line.toLowerCase();
-        for (const [pattern, [jFull, jAbbr]] of Object.entries(MAJOR_RADIOLOGY_JOURNAL_MAP)) {
-          const reg = new RegExp(`\\b${pattern}\\b`, 'i');
-          if (reg.test(lowerLine)) {
-            journal = jFull;
-            journalAbbr = jAbbr;
-            break;
+          let journal = "";
+          let journalAbbr = "";
+          const lowerLine = line.toLowerCase();
+          for (const [pattern, [jFull, jAbbr]] of Object.entries(MAJOR_RADIOLOGY_JOURNAL_MAP)) {
+            const reg = new RegExp(`\\b${pattern}\\b`, 'i');
+            if (reg.test(lowerLine)) {
+              journal = jFull;
+              journalAbbr = jAbbr;
+              break;
+            }
           }
-        }
-        if (!journal && parts.length >= 3) {
-          const cand = parts[2].split(/\b(19\d\d|20\d\d)\b|;/)[0].trim().replace(/\.+$/, '');
-          if (cand && cand.length > 1 && !/^\d+$/.test(cand)) {
-            journal = cand;
+          if (!journal && parts.length >= 3) {
+            const cand = parts[2].split(/\b(19\d\d|20\d\d)\b|;/)[0].trim().replace(/\.+$/, '');
+            if (cand && cand.length > 1 && !/^\d+$/.test(cand)) {
+              journal = cand;
+            }
           }
-        }
 
-        references.push({
-          ref_num: refNum,
-          raw_text: line,
-          title: title,
-          authors: authors,
-          journal: journal,
-          journal_abbr: journalAbbr,
-          year: "",
-          volume: "",
-          issue: "",
-          pages: "",
-          doi: doi
-        });
-      }
-    } else if (references.length > 0) {
-      // Check multi-line reference continuation (e.g. wrapped DOI or PMID on subsequent paragraph)
-      const contDoiM = line.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
-                        line.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
-      if (contDoiM) {
-        const lastRef = references[references.length - 1];
-        lastRef.raw_text += " " + line;
-        if (!lastRef.doi) {
-          lastRef.doi = contDoiM[1].replace(/[.,;)]+$/, '');
+          references.push({
+            ref_num: refNum,
+            raw_text: line,
+            title: title,
+            authors: authors,
+            journal: journal,
+            journal_abbr: journalAbbr,
+            year: "",
+            volume: "",
+            issue: "",
+            pages: "",
+            doi: doi
+          });
+        }
+      } else if (references.length > 0) {
+        // Check multi-line reference continuation (e.g. wrapped DOI or PMID on subsequent line/paragraph)
+        const contDoi = cleanDoi(line);
+        if (contDoi) {
+          const lastRef = references[references.length - 1];
+          lastRef.raw_text += " " + line;
+          if (!lastRef.doi) {
+            lastRef.doi = contDoi;
+          }
         }
       }
     }
@@ -364,7 +387,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
 
   // 4. Extract citations
   const sites = [];
-  const maxRefNum = references.length > 0 ? references.length : 999;
+  const maxRefNum = references.length > 0 ? Math.max(...references.map(r => r.ref_num)) : 999;
 
   for (let pi = bodyStart; pi < scanEnd; pi++) {
     const pEl = paragraphs[pi];
@@ -372,20 +395,40 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
     if (!pText.trim()) continue;
 
     const runs = Array.from(pEl.getElementsByTagNameNS(W_NS, "r")).filter(r => !r.closest("w\\:del, del"));
-    let combinedPrev = "";
 
+    // Coalesce adjacent runs sharing identical vertAlign="superscript"
+    const spans = [];
     for (let ri = 0; ri < runs.length; ri++) {
       const r = runs[ri];
       const rText = Array.from(r.getElementsByTagNameNS(W_NS, "t")).map(t => t.textContent).join("");
-      
-      // Check superscript
       const rPr = r.getElementsByTagNameNS(W_NS, "rPr")[0];
       const va = rPr ? rPr.getElementsByTagNameNS(W_NS, "vertAlign")[0] : null;
       const isSup = va && va.getAttributeNS(W_NS, "val") === "superscript";
+      const canCoalesce = spans.length > 0 && spans[spans.length - 1].isSup === isSup && (!isSup || (SUP_CHAR_REGEX.test(spans[spans.length - 1].text) && SUP_CHAR_REGEX.test(rText)));
 
-      // 1. Superscript check
-      if ((effectiveFormat === "auto" || effectiveFormat === "sup" || effectiveFormat === "mixed") && isSup && /^\d{1,3}(?:[,-]\d{1,3})*$/.test(rText)) {
-        const inner = rText.replace(/–/g, '-');
+      if (canCoalesce) {
+        spans[spans.length - 1].text += rText;
+        spans[spans.length - 1].endRunIdx = ri;
+        spans[spans.length - 1].runs.push(r);
+      } else {
+        spans.push({
+          text: rText,
+          isSup: isSup,
+          startRunIdx: ri,
+          endRunIdx: ri,
+          runs: [r]
+        });
+      }
+    }
+
+    // 1. Superscript check over coalesced spans
+    let combinedPrev = "";
+    for (const span of spans) {
+      const rText = span.text;
+      const ri = span.startRunIdx;
+      const endRi = span.endRunIdx;
+      if ((effectiveFormat === "auto" || effectiveFormat === "sup" || effectiveFormat === "mixed") && span.isSup && /^\d{1,3}(?:[,-–—−]\d{1,3})*$/.test(rText)) {
+        const inner = rText.replace(/[–—−]/g, '-');
         const nums = [];
         inner.split(/\s*,\s*/).forEach(part => {
           if (part.includes('-')) {
@@ -416,6 +459,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
+              end_run_idx: endRi,
               kind: "sup",
               text: rText,
               context_before: combinedPrev.slice(-40),
@@ -427,124 +471,143 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
           }
         }
       }
-
-      // 2. Square Bracket match [1, 2]
-      if (effectiveFormat === "auto" || effectiveFormat === "bracket") {
-        let bMatch;
-        const bracketRe = new RegExp(BRACKET_REGEX);
-        while ((bMatch = bracketRe.exec(rText)) !== null) {
-          const contextPrior = (combinedPrev + rText.slice(0, bMatch.index)).trim();
-          if (NON_CITATION_PRECEDING_WORDS.test(contextPrior) || CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
-            continue;
-          }
-          if (NON_CITATION_INNER_CONTENT.test(bMatch[0].slice(1, -1))) {
-            continue;
-          }
-
-          const inner = bMatch[1].replace(/–/g, '-');
-          const nums = [];
-          inner.split(/\s*,\s*/).forEach(part => {
-            if (part.includes('-')) {
-              const sp = part.split('-');
-              const s0 = parseInt(sp[0], 10);
-              const s1 = parseInt(sp[1], 10);
-              if (!isNaN(s0) && !isNaN(s1)) {
-                for (let k = s0; k <= s1; k++) nums.push(k);
-              }
-            } else {
-              const n = parseInt(part, 10);
-              if (!isNaN(n)) nums.push(n);
-            }
-          });
-
-          if (nums.length > 0 && nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
-            const globalStart = combinedPrev.length + bMatch.index;
-            const globalEnd = globalStart + bMatch[0].length;
-            const sent = extractSurroundingSentence(pText, globalStart, globalEnd);
-            sites.push({
-              paragraph_idx: pi,
-              run_idx: ri,
-              kind: "bracket",
-              text: bMatch[0],
-              context_before: pText.slice(Math.max(0, globalStart - 40), globalStart),
-              sentence: sent,
-              nums: Array.from(new Set(nums)).sort((a,b) => a - b),
-              match_start: globalStart,
-              match_end: globalEnd
-            });
-          }
-        }
-      }
-
-      // 3. Parenthetical match (1, 2)
-      if (effectiveFormat === "auto" || effectiveFormat === "paren" || effectiveFormat === "mixed") {
-        let match;
-        const parenRe = new RegExp(PAREN_REGEX);
-        while ((match = parenRe.exec(rText)) !== null) {
-          // Check clinical nouns and clinical scale lookbehind
-          const contextPrior = (combinedPrev + rText.slice(0, match.index)).trim();
-          if (NON_CITATION_PRECEDING_WORDS.test(contextPrior) || CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
-            continue;
-          }
-          if (NON_CITATION_INNER_CONTENT.test(match[0].slice(1, -1))) {
-            continue;
-          }
-          // Check enumerated list start
-          const trailing = rText.slice(match.index, match.index + match[0].length + 20);
-          if (ENUMERATED_LIST_START.test(trailing) && !contextPrior) {
-            continue;
-          }
-
-          const inner = match[1].replace(/–/g, '-');
-          const nums = [];
-          let hasZero = false;
-          inner.split(/\s*,\s*/).forEach(part => {
-            if (part.includes('-')) {
-              const sp = part.split('-');
-              const s0 = parseInt(sp[0], 10);
-              const s1 = parseInt(sp[1], 10);
-              if (!isNaN(s0) && !isNaN(s1)) {
-                if (s0 <= 0 || s1 <= 0) {
-                  hasZero = true;
-                  return;
-                }
-                for (let k = s0; k <= s1; k++) nums.push(k);
-              }
-            } else {
-              const n = parseInt(part, 10);
-              if (!isNaN(n)) {
-                if (n <= 0) {
-                  hasZero = true;
-                  return;
-                }
-                nums.push(n);
-              }
-            }
-          });
-
-          if (hasZero || nums.length === 0) {
-            continue;
-          }
-
-          if (nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
-            const globalStart = combinedPrev.length + match.index;
-            const globalEnd = globalStart + match[0].length;
-            const sent = extractSurroundingSentence(pText, globalStart, globalEnd);
-            sites.push({
-              paragraph_idx: pi,
-              run_idx: ri,
-              kind: "paren",
-              text: match[0],
-              context_before: pText.slice(Math.max(0, globalStart - 40), globalStart),
-              sentence: sent,
-              nums: Array.from(new Set(nums)).sort((a,b) => a - b),
-              match_start: globalStart,
-              match_end: globalEnd
-            });
-          }
-        }
-      }
       combinedPrev += rText;
+    }
+
+    // Helper to map paragraph character offsets to run index span
+    function findRunSpan(mStart, mEnd) {
+      let runI = 0;
+      let endRunI = 0;
+      let curPos = 0;
+      for (let rIdx = 0; rIdx < runs.length; rIdx++) {
+        const rLen = Array.from(runs[rIdx].getElementsByTagNameNS(W_NS, "t")).map(t => t.textContent).join("").length;
+        if (curPos <= mStart && mStart < curPos + rLen) {
+          runI = rIdx;
+        }
+        if (curPos < mEnd && mEnd <= curPos + rLen) {
+          endRunI = rIdx;
+          break;
+        }
+        curPos += rLen;
+      }
+      return { runI, endRunI };
+    }
+
+    // 2. Square Bracket match [1, 2] across paragraph text
+    if (effectiveFormat === "auto" || effectiveFormat === "bracket" || effectiveFormat === "mixed") {
+      const bMatches = pText.matchAll(new RegExp(BRACKET_REGEX));
+      for (const bm of bMatches) {
+        const contextPrior = pText.slice(0, bm.index).trim();
+        if (NON_CITATION_PRECEDING_WORDS.test(contextPrior) || CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
+          continue;
+        }
+        if (NON_CITATION_INNER_CONTENT.test(bm[0].slice(1, -1))) {
+          continue;
+        }
+
+        const inner = bm[1].replace(/[–—−]/g, '-');
+        const nums = [];
+        inner.split(/\s*,\s*/).forEach(part => {
+          if (part.includes('-')) {
+            const sp = part.split('-');
+            const s0 = parseInt(sp[0], 10);
+            const s1 = parseInt(sp[1], 10);
+            if (!isNaN(s0) && !isNaN(s1)) {
+              for (let k = s0; k <= s1; k++) nums.push(k);
+            }
+          } else {
+            const n = parseInt(part, 10);
+            if (!isNaN(n)) nums.push(n);
+          }
+        });
+
+        if (nums.length > 0 && nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
+          const globalStart = bm.index;
+          const globalEnd = globalStart + bm[0].length;
+          const sent = extractSurroundingSentence(pText, globalStart, globalEnd);
+          const { runI, endRunI } = findRunSpan(globalStart, globalEnd);
+          sites.push({
+            paragraph_idx: pi,
+            run_idx: runI,
+            end_run_idx: endRunI,
+            kind: "bracket",
+            text: bm[0],
+            context_before: pText.slice(Math.max(0, globalStart - 40), globalStart),
+            sentence: sent,
+            nums: Array.from(new Set(nums)).sort((a,b) => a - b),
+            match_start: globalStart,
+            match_end: globalEnd
+          });
+        }
+      }
+    }
+
+    // 3. Parenthetical match (1, 2) across paragraph text
+    if (effectiveFormat === "auto" || effectiveFormat === "paren" || effectiveFormat === "mixed") {
+      const pMatches = pText.matchAll(new RegExp(PAREN_REGEX));
+      for (const pm of pMatches) {
+        const contextPrior = pText.slice(0, pm.index).trim();
+        if (NON_CITATION_PRECEDING_WORDS.test(contextPrior) || CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
+          continue;
+        }
+        if (NON_CITATION_INNER_CONTENT.test(pm[0].slice(1, -1))) {
+          continue;
+        }
+        const trailing = pText.slice(pm.index, pm.index + pm[0].length + 20);
+        if (ENUMERATED_LIST_START.test(trailing) && !contextPrior) {
+          continue;
+        }
+
+        const inner = pm[1].replace(/[–—−]/g, '-');
+        const nums = [];
+        let hasZero = false;
+        inner.split(/\s*,\s*/).forEach(part => {
+          if (part.includes('-')) {
+            const sp = part.split('-');
+            const s0 = parseInt(sp[0], 10);
+            const s1 = parseInt(sp[1], 10);
+            if (!isNaN(s0) && !isNaN(s1)) {
+              if (s0 <= 0 || s1 <= 0) {
+                hasZero = true;
+                return;
+              }
+              for (let k = s0; k <= s1; k++) nums.push(k);
+            }
+          } else {
+            const n = parseInt(part, 10);
+            if (!isNaN(n)) {
+              if (n <= 0) {
+                hasZero = true;
+                return;
+              }
+              nums.push(n);
+            }
+          }
+        });
+
+        if (hasZero || nums.length === 0) {
+          continue;
+        }
+
+        if (nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
+          const globalStart = pm.index;
+          const globalEnd = globalStart + pm[0].length;
+          const sent = extractSurroundingSentence(pText, globalStart, globalEnd);
+          const { runI, endRunI } = findRunSpan(globalStart, globalEnd);
+          sites.push({
+            paragraph_idx: pi,
+            run_idx: runI,
+            end_run_idx: endRunI,
+            kind: "paren",
+            text: pm[0],
+            context_before: pText.slice(Math.max(0, globalStart - 40), globalStart),
+            sentence: sent,
+            nums: Array.from(new Set(nums)).sort((a,b) => a - b),
+            match_start: globalStart,
+            match_end: globalEnd
+          });
+        }
+      }
     }
   }
 
@@ -1091,6 +1154,16 @@ export async function injectZoteroFieldsInBrowser(
       }
     }
 
+    // If this site coalesced across multiple runs, empty trailing runs so they don't leave residue
+    if (site.end_run_idx && site.end_run_idx > site.run_idx) {
+      for (let extraIdx = site.run_idx + 1; extraIdx <= site.end_run_idx && extraIdx < runs.length; extraIdx++) {
+        const extraT = runs[extraIdx].getElementsByTagNameNS(W_NS, "t");
+        for (let ti = 0; ti < extraT.length; ti++) {
+          extraT[ti].textContent = "";
+        }
+      }
+    }
+
     const citationItems = newSiteNums.map(n => ({
       id: `zotero_key_${n}`,
       uris: [`http://zotero.org/users/0/items/zotero_key_${n}`],
@@ -1128,14 +1201,30 @@ export async function injectZoteroFieldsInBrowser(
   // Boundary Isolation & Atomic Reference Blocks
   const REF_HEADER_RE = /^\s*(?:REFERENCES|Reference List|Bibliography|Works Cited)\s*$/i;
   const POST_REF_HEADER_RE = /^\s*(?:Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)/i;
-  const REF_START_RE = /^(\d{1,3})\.\s*(.*)$/;
+  const REF_START_RE = /^\s*[\(\[]?(\d{1,3})[\)\]\.)]\.?\s*(.*)$/s;
+
+  const getParaText = (p) => {
+    const runs = Array.from(p.getElementsByTagNameNS(W_NS, "r")).filter(r => !r.closest("w\\:del, del"));
+    return runs.map(r => {
+      let rText = "";
+      for (let ci = 0; ci < r.childNodes.length; ci++) {
+        const child = r.childNodes[ci];
+        if (child.localName === "t") {
+          rText += child.textContent || "";
+        } else if (child.localName === "br") {
+          rText += "\n";
+        }
+      }
+      return rText;
+    }).join("");
+  };
 
   let headerIdx = -1;
   let startIdx = -1;
   let endIdx = -1;
 
   for (let i = 0; i < paragraphs.length; i++) {
-    const t = Array.from(paragraphs[i].getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+    const t = getParaText(paragraphs[i]).trim();
     if (REF_HEADER_RE.test(t)) {
       headerIdx = i;
       startIdx = i + 1;
@@ -1145,7 +1234,7 @@ export async function injectZoteroFieldsInBrowser(
 
   if (startIdx === -1) {
     for (let i = 0; i < paragraphs.length; i++) {
-      const t = Array.from(paragraphs[i].getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+      const t = getParaText(paragraphs[i]).trim();
       const m = t.match(REF_START_RE);
       if (m && parseInt(m[1], 10) === 1) {
         startIdx = i;
@@ -1159,7 +1248,7 @@ export async function injectZoteroFieldsInBrowser(
     endIdx = paragraphs.length;
   } else {
     for (let i = startIdx; i < paragraphs.length; i++) {
-      const t = Array.from(paragraphs[i].getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+      const t = getParaText(paragraphs[i]).trim();
       if (POST_REF_HEADER_RE.test(t)) {
         endIdx = i;
         break;
@@ -1168,24 +1257,59 @@ export async function injectZoteroFieldsInBrowser(
     if (endIdx === -1) endIdx = paragraphs.length;
   }
 
+  // Split any multi-reference paragraphs separated by newlines/breaks into distinct paragraphs
+  let currentEnd = endIdx;
+  let pi = startIdx;
+  while (pi < currentEnd && pi < paragraphs.length) {
+    const p = paragraphs[pi];
+    const fullText = getParaText(p).trim();
+    const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const validMatches = lines.filter(l => REF_START_RE.test(l));
+    if (lines.length > 1 && validMatches.length >= 2) {
+      const parent = p.parentNode;
+      const refChild = p.nextSibling;
+      const newPs = [];
+      lines.forEach(line => {
+        const newP = xmlDoc.createElementNS(W_NS, "w:p");
+        const newR = xmlDoc.createElementNS(W_NS, "w:r");
+        const newT = xmlDoc.createElementNS(W_NS, "w:t");
+        newT.textContent = line;
+        newR.appendChild(newT);
+        newP.appendChild(newR);
+        parent.insertBefore(newP, refChild);
+        newPs.push(newP);
+      });
+      parent.removeChild(p);
+      paragraphs.splice(pi, 1, ...newPs);
+      currentEnd += (lines.length - 1);
+      pi += lines.length;
+    } else {
+      pi++;
+    }
+  }
+  endIdx = currentEnd;
+
   // Extract atomic reference blocks within [startIdx, endIdx)
   const blocks = [];
   let currentBlock = null;
 
   for (let i = startIdx; i < endIdx; i++) {
     const p = paragraphs[i];
-    const t = Array.from(p.getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+    const t = getParaText(p).trim();
     if (!t) continue;
     const m = t.match(REF_START_RE);
     if (m) {
       const oldN = parseInt(m[1], 10);
       const newN = mapping[oldN] || oldN;
+      const content = m[2];
+      const oldPrefix = t.slice(0, t.length - content.length).trim();
       currentBlock = {
         oldN,
         newN,
+        oldPrefix,
         primaryP: p,
         paragraphs: [p],
-        rest: m[2],
+        rest: content,
         m
       };
       blocks.push(currentBlock);
@@ -1197,8 +1321,8 @@ export async function injectZoteroFieldsInBrowser(
   if (blocks.length > 0) {
     // Re-number leading digit of each bibliography block
     blocks.forEach(block => {
-      const oldPrefix = block.oldN + ".";
-      const newPrefix = block.newN + ".";
+      const oldPrefix = block.oldPrefix || (block.oldN + ".");
+      let newPrefix = (targetStyle === 'ieee') ? `[${block.newN}]` : (targetStyle === 'apa' || targetStyle === 'harvard') ? '' : `${block.newN}.`;
       const p = block.primaryP;
       const tNodes = Array.from(p.getElementsByTagNameNS(W_NS, "t"));
 
@@ -1230,17 +1354,24 @@ export async function injectZoteroFieldsInBrowser(
           if (trimmed.startsWith(oldPrefix)) {
             const indent = tText.substring(0, tText.length - trimmed.length);
             const afterPrefix = trimmed.substring(oldPrefix.length);
+            let formattedNewPrefix = newPrefix;
+            let formattedAfterPrefix = afterPrefix;
+            if (newPrefix && !afterPrefix.startsWith(" ") && !afterPrefix.startsWith("\t")) {
+              formattedNewPrefix = newPrefix + " ";
+            } else if (!newPrefix) {
+              formattedAfterPrefix = afterPrefix.trimStart();
+            }
             t.textContent = indent;
             const delEl = createDelRun(xmlDoc, oldPrefix, revCounter++, author, dateStr);
-            const insEl = createInsRun(xmlDoc, newPrefix, revCounter++, author, dateStr);
+            const insEl = createInsRun(xmlDoc, formattedNewPrefix, revCounter++, author, dateStr);
             const runParent = t.parentNode;
             p.insertBefore(delEl, runParent.nextSibling);
             p.insertBefore(insEl, delEl.nextSibling);
-            if (afterPrefix) {
+            if (formattedAfterPrefix) {
               const afterRun = xmlDoc.createElementNS(W_NS, "w:r");
               const afterT = xmlDoc.createElementNS(W_NS, "w:t");
               afterT.setAttribute("xml:space", "preserve");
-              afterT.textContent = afterPrefix;
+              afterT.textContent = formattedAfterPrefix;
               afterRun.appendChild(afterT);
               p.insertBefore(afterRun, insEl.nextSibling);
             }
@@ -1273,7 +1404,14 @@ export async function injectZoteroFieldsInBrowser(
           if (trimmed.startsWith(oldPrefix)) {
             const indent = tText.substring(0, tText.length - trimmed.length);
             const afterPrefix = trimmed.substring(oldPrefix.length);
-            t.textContent = indent + newPrefix + afterPrefix;
+            let formattedNewPrefix = newPrefix;
+            let formattedAfterPrefix = afterPrefix;
+            if (newPrefix && !afterPrefix.startsWith(" ") && !afterPrefix.startsWith("\t")) {
+              formattedNewPrefix = newPrefix + " ";
+            } else if (!newPrefix) {
+              formattedAfterPrefix = afterPrefix.trimStart();
+            }
+            t.textContent = indent + formattedNewPrefix + formattedAfterPrefix;
             replaced = true;
             break;
           }

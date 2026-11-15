@@ -1566,6 +1566,154 @@ class TestZoteroLinkEngine(unittest.TestCase):
         parsed_eur = parse_reference_line(4, "4. Saliou G, Krings T. Pediatric vascular malformations. Eur Radiol. 2014;24(12):3120-3129.")
         self.assertEqual(parsed_eur.journal, "European Radiology")
 
+    def test_46_defensive_hardening_and_failure_modes(self):
+        """
+        Verify all 7 defensive hardening failure mode fixes:
+        1. Split-run superscripts (coalescing consecutive superscript runs e.g. '1,' + '2' and '1' + '2' for ref 12)
+        2. Split-run bracket/paren citations spanning across run boundaries (e.g. '[' + '1, 2' + ']')
+        3. Non-standard bibliography numbering ([1], 1), (1), 1.\t, [1].)
+        4. DOI punctuation enclosure cleansing ([doi: ...], <doi: ...>, "...", '...', trailing commas/periods)
+        5. Single-paragraph multi-reference blocks separated by newlines
+        6. Subtitle-robust title similarity (Dice + containment preventing false rejections of registry hits)
+        7. Unicode dash invariance in number ranges (en-dash, em-dash, minus)
+        """
+        from server.parser import (
+            parse_docx_manuscript,
+            clean_doi,
+            parse_reference_line,
+            REF_START,
+            profile_document_citation_format
+        )
+        from server.validator import check_title_similarity
+        from server.linker import link_docx_manuscript
+        from docx.oxml.ns import qn
+
+        # 1. Test DOI Enclosure Cleansing
+        doi_cases = [
+            ("[doi: 10.1038/nature12345]", "10.1038/nature12345"),
+            ("<doi: 10.1038/nature12345>", "10.1038/nature12345"),
+            ("\"10.1038/nature12345\"", "10.1038/nature12345"),
+            ("'10.1038/nature12345'", "10.1038/nature12345"),
+            ("doi: 10.1038/nature12345.", "10.1038/nature12345"),
+            ("doi: 10.1038/nature12345,", "10.1038/nature12345"),
+            ("doi: 10.1038/nature12345;", "10.1038/nature12345"),
+            ("[doi:10.1038/nature12345]", "10.1038/nature12345"),
+            ("<https://doi.org/10.1038/nature12345>", "10.1038/nature12345")
+        ]
+        for raw, expected in doi_cases:
+            self.assertEqual(clean_doi(raw), expected, f"clean_doi failed on {raw}")
+
+        # 2. Test Non-Standard Bibliography Delimiters
+        bib_delims = [
+            ("1. Smith J. Deep Learning. Radiology. 2020.", 1, "Smith J. Deep Learning. Radiology. 2020."),
+            ("[1] Smith J. Deep Learning. Radiology. 2020.", 1, "Smith J. Deep Learning. Radiology. 2020."),
+            ("(1) Smith J. Deep Learning. Radiology. 2020.", 1, "Smith J. Deep Learning. Radiology. 2020."),
+            ("1) Smith J. Deep Learning. Radiology. 2020.", 1, "Smith J. Deep Learning. Radiology. 2020."),
+            ("[1]. Smith J. Deep Learning. Radiology. 2020.", 1, "Smith J. Deep Learning. Radiology. 2020."),
+            ("1.\tSmith J. Deep Learning. Radiology. 2020.", 1, "Smith J. Deep Learning. Radiology. 2020.")
+        ]
+        for line, exp_num, exp_content in bib_delims:
+            m = REF_START.match(line)
+            self.assertIsNotNone(m, f"REF_START failed to match '{line}'")
+            self.assertEqual(int(m.group(1)), exp_num)
+            self.assertEqual(m.group(2).strip(), exp_content.strip())
+
+        # 3. Test Subtitle-Robust Title Similarity (Dice + Containment)
+        target = "Deep learning in chest radiography"
+        candidate_with_long_subtitle = "Deep learning in chest radiography: a multi-reader multicenter validation study with international cohort benchmarking"
+        unrelated = "Surgical resection of glioblastoma multiforme in elderly patients"
+        
+        sim_subtitle = check_title_similarity(target, candidate_with_long_subtitle)
+        self.assertGreaterEqual(sim_subtitle, 0.50, "Similarity must be >= 0.50 when candidate includes matching title + long subtitle")
+        
+        sim_unrelated = check_title_similarity(target, unrelated)
+        self.assertLess(sim_unrelated, 0.20, "Unrelated paper must score low similarity")
+
+        # 4. Test Split-Run Superscripts & Split-Run Brackets in Word Document
+        split_doc = docx.Document()
+        p1 = split_doc.add_paragraph()
+        p1.add_run("Deep learning has achieved unprecedented diagnostic accuracy in medical imaging")
+        # Split run 1: "1," (superscript) + "2" (superscript)
+        r_sup1 = p1.add_run("1,")
+        r_sup1.font.superscript = True
+        r_sup2 = p1.add_run("2")
+        r_sup2.font.superscript = True
+        p1.add_run(". Subsequent multi-center clinical trials")
+        # Split run 2 for ref 12: "1" (superscript) + "2" (superscript)
+        r_sup3 = p1.add_run("1")
+        r_sup3.font.superscript = True
+        r_sup4 = p1.add_run("2")
+        r_sup4.font.superscript = True
+        p1.add_run(" validated these results.")
+
+        # Split run bracket citation: "[" in run 1, "1, 2" in run 2, "]" in run 3
+        p2 = split_doc.add_paragraph()
+        p2.add_run("Prior retrospective investigations [")
+        p2.add_run("1, 2")
+        p2.add_run("] also corroborated these findings.")
+
+        # Add references section with non-standard delimiters and multi-reference newlines
+        split_doc.add_paragraph("REFERENCES")
+        p_ref = split_doc.add_paragraph()
+        p_ref.add_run("[1] Topol EJ. High-performance medicine. Nat Med. 2019;25(1):44-56. [doi: 10.1038/s41591-018-0300-7]\n(2) Esteva A. Dermatologist-level classification. Nature. 2017;542:115-118.\n12) Rajpurkar P. CheXNet. arXiv. 2017.")
+
+        split_buf = BytesIO()
+        split_doc.save(split_buf)
+        split_buf.seek(0)
+
+        # Parse document
+        paras, sites, references = parse_docx_manuscript(split_buf)
+
+        # Assert all 3 references extracted despite [1], (2), 12) and newline splitting
+        self.assertEqual(len(references), 3, f"Expected 3 references, got {len(references)}")
+        self.assertEqual(references[0].ref_num, 1)
+        self.assertEqual(references[0].doi, "10.1038/s41591-018-0300-7", "Enclosing brackets must be stripped from DOI")
+        self.assertEqual(references[1].ref_num, 2)
+        self.assertEqual(references[2].ref_num, 12)
+
+        # Assert split-run superscripts were coalesced properly
+        sup_sites = [s for s in sites if s.kind == "sup"]
+        self.assertGreaterEqual(len(sup_sites), 2, "Must find both coalesced superscript sites")
+        self.assertEqual(sup_sites[0].nums, [1, 2], "Split run '1,' + '2' must coalesce into citation [1, 2]")
+        self.assertEqual(sup_sites[1].nums, [12], "Split run '1' + '2' must coalesce into citation [12] instead of dropping 2")
+
+        # Assert split-run bracket citation was captured across run boundaries
+        bracket_sites = [s for s in sites if s.kind == "bracket"]
+        self.assertGreaterEqual(len(bracket_sites), 1, "Must find split bracket citation across run boundaries")
+        self.assertEqual(bracket_sites[0].nums, [1, 2])
+
+        # 5. Test Word linking with defensive hardening
+        out_linked = BytesIO()
+        split_buf.seek(0)
+        link_docx_manuscript(
+            split_buf,
+            sites,
+            references,
+            output_target=out_linked,
+            renumber_ama=True,
+            track_changes=False
+        )
+        linked_docx = docx.Document(BytesIO(out_linked.getvalue()))
+        linked_xml = linked_docx._part._element.xml
+        self.assertIn("ADDIN ZOTERO_BIBL", linked_xml)
+        self.assertIn("ADDIN ZOTERO_ITEM", linked_xml)
+
+        # 6. Test Unicode Dash Invariance
+        p_dash = docx.Document()
+        pd = p_dash.add_paragraph("Imaging was evaluated across three separate clinical investigations (")
+        # En-dash: \u2013, Em-dash: \u2014, Minus: \u2212
+        pd.add_run("1\u20133")
+        pd.add_run(").")
+        p_dash.add_paragraph("REFERENCES")
+        p_dash.add_paragraph("1. Ref One. 2020.\n2. Ref Two. 2020.\n3. Ref Three. 2020.")
+        dash_buf = BytesIO()
+        p_dash.save(dash_buf)
+        dash_buf.seek(0)
+
+        _, dash_sites, _ = parse_docx_manuscript(dash_buf)
+        self.assertEqual(len(dash_sites), 1)
+        self.assertEqual(dash_sites[0].nums, [1, 2, 3], "En-dash 1\u20133 must expand to [1, 2, 3]")
+
 if __name__ == "__main__":
     unittest.main()
 

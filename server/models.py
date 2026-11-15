@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class CitationSite(BaseModel):
     paragraph_idx: int
     run_idx: int = 0
+    end_run_idx: Optional[int] = None
     kind: str = Field(..., description="'paren' for (1, 2) or 'sup' for superscript")
     text: str
     context_before: str = ""

@@ -299,6 +299,35 @@
   - Python Unit Tests: All 45/45 tests in `tests/test_engine.py` continue to pass cleanly.
   - Headless Chrome CDP Live Test: Verified via `scripts/verify_csl_switching_live.py` that `btnSample` is completely absent from the DOM (`btn_sample_exists == False`) and clicking `#btnClearManuscript` resets `resultsSection.style.display` to `'none'`, `appState.parsedData` to `null`, and `appState.fileName` to `''`.
 
+### [2026-11-15 15:30] ARCH-DECISION-022: Defensive Hardening Across 7 Critical Failure Modes
+- **Context**: User requested: *"can you find the ways this could give wrong results and then fix it ??"*.
+- **Adversarial Audit & Resolutions**:
+  1. **Title Matching False Negatives in Crossref Validation (Short Title vs. Subtitle)**:
+     - *Issue*: Strict Jaccard word overlap failed when an author cited only the primary title while Crossref contained lengthy subtitles (e.g. `10.1038/nature12345` with title `Epigenetic reprogramming` vs Crossref `Epigenetic reprogramming: mechanisms, dynamics, and clinical applications`).
+     - *Resolution*: Implemented hybrid Dice similarity and asymmetric containment ratio (`common / min(len1, len2) >= 0.70`) across both `server/validator.py` and `static/js/crossref_audit.js`.
+  2. **Split Run Boundaries in Word OpenXML**:
+     - *Issue*: Word frequently fragments runs during typing or auto-save (e.g. `[1, 2]` split across `[`, `1, 2`, `]` or superscript `1,` and `2` in separate `<w:r>` elements).
+     - *Resolution*: Implemented run coalescing for consecutive superscript `<w:r>` elements, paragraph-level bracket/parenthesis matching with run index mapping (`start_run_idx` / `end_run_idx`), and multi-run blanking during field injection across `server/parser.py`, `server/linker.py`, and `static/js/docx_engine.js`.
+  3. **Erroneous Superscripted Punctuation Coalescing**:
+     - *Issue*: When authors format a sentence period `.` or comma as superscript right after a citation, naive run coalescing merged `4,23,36` with `. ` into `4,23,36. `, breaking citation regex matching.
+     - *Resolution*: Added `SUP_CHAR_RE = /^[\d,\s\-–—−]+$/` guard gating run coalescing in both Python and JS, ensuring punctuation runs remain separate.
+  4. **Multi-Reference Single Paragraphs**:
+     - *Issue*: Pasted bibliographies where multiple references reside inside a single `<w:p>` separated by `\n` or `<w:br/>` prevented individual renumbering, CSL restyling, and caused bibliography field injection to be skipped.
+     - *Resolution*: Implemented `split_multiline_reference_paragraphs` in both `server/linker.py` and `static/js/docx_engine.js`, dynamically splitting multi-reference paragraphs into distinct `<w:p>` elements while preserving run integrity.
+  5. **Non-Standard Bibliography Delimiters**:
+     - *Issue*: References formatted as `[1]`, `(1)`, `1)`, or `[1].` were not recognized by strict `^\d+\.\s+` regexes.
+     - *Resolution*: Generalized `REF_START` to `^\s*[\(\[]?(\d{1,3})[\)\]\.)]\.?\s*(.*)$` with `re.DOTALL` across both backend and frontend parsers.
+  6. **Enclosing Artifacts in Extracted DOIs**:
+     - *Issue*: Extracted DOIs often retained trailing punctuation or enclosing brackets/quotes (e.g. `[doi: 10.1038/s41591-018-0300-7]`).
+     - *Resolution*: Hardened `clean_doi` / `cleanDoi` to strip enclosing quotes, angle brackets, square brackets, and parentheses `.lstrip('<"\'[(').rstrip('.,;)]>\'"`')`.
+  7. **Unicode Dash Invariance Across Citation Ranges**:
+     - *Issue*: Authors frequently use en-dashes (`–`, `\u2013`), em-dashes (`—`, `\u2014`), or mathematical minus (`−`, `\u2212`) in ranges like `1–3`, which failed single ASCII hyphen regexes.
+     - *Resolution*: Standardized dash normalization across all regexes and expansion logic (`.replace(/[–—−]/g, '-')`).
+- **Verification**:
+  - Python Unit Tests: Added `test_46_defensive_hardening_and_failure_modes` to `tests/test_engine.py` (all 46/46 unit tests pass).
+  - Headless Chrome CDP Live Test: Empirically verified via `scripts/verify_csl_switching_live.py` (all checks passed with 43 references and 33 citation sites).
+
+
 
 
 

@@ -7,11 +7,12 @@ import docx
 from docx.oxml.ns import qn
 from server.models import CitationSite, ReferenceEntry
 
-PAREN_CIT = re.compile(r'\(((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)\)')
-BRACKET_CIT = re.compile(r'\[((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)]')
-PUNCT_CIT = re.compile(r'(?<=[.,;:])((?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?))*)')
-SUP_CIT = re.compile(r'^\d{1,3}(?:[,-]\d{1,3})*$')
-REF_START = re.compile(r'^(\d{1,3})\.\s+(.*)$')
+PAREN_CIT = re.compile(r'\(((?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?))*)\)')
+BRACKET_CIT = re.compile(r'\[((?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?))*)]')
+PUNCT_CIT = re.compile(r'(?<=[.,;:])((?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?)(?:\s*,\s*(?:\d{1,3}(?:\s*[-–—−]\s*\d{1,3})?))*)')
+SUP_CIT = re.compile(r'^\d{1,3}(?:[,-–—−]\d{1,3})*$')
+SUP_CHAR_RE = re.compile(r'^[\d,\s\-–—−]+$')
+REF_START = re.compile(r'^\s*[\(\[]?(\d{1,3})[\)\]\.)]\.?\s*(.*)$')
 REF_HEADER = re.compile(r'^(REFERENCES|Reference List|Bibliography|Works Cited)\s*$', re.I)
 BODY_START = re.compile(r'^(ABSTRACT|SUMMARY STATEMENT|INTRODUCTION|Introduction|BACKGROUND|Key Results)\s*$', re.I)
 POST_REF_HEADER = re.compile(
@@ -158,10 +159,10 @@ def clean_doi(raw: str) -> str:
     d = raw.strip()
     m = DOI_RE.search(d)
     if m:
-        return m.group(1).rstrip('.,;)')
+        return m.group(1).lstrip('<"\'[(').rstrip('.,;)]>\'"`')
     m2 = FALLBACK_DOI_RE.search(d)
     if m2:
-        return m2.group(1).rstrip('.,;)')
+        return m2.group(1).lstrip('<"\'[(').rstrip('.,;)]>\'"`')
     return ""
 
 def parse_reference_line(num: int, line: str) -> ReferenceEntry:
@@ -290,9 +291,21 @@ def profile_document_citation_format(
             p_obj = doc.paragraphs[pi]
             combined = ""
             active_runs = [docx.text.run.Run(r_el, p_obj) for r_el in p_obj._p.xpath('.//w:r[not(ancestor::w:del)]')]
+            spans = []
             for r in active_runs:
-                r_txt = r.text or ""
-                if is_superscript(r) and SUP_CIT.match(r_txt):
+                txt = r.text or ""
+                sup = is_superscript(r)
+                can_coalesce = (
+                    spans and spans[-1]["is_sup"] == sup and
+                    (not sup or (SUP_CHAR_RE.match(spans[-1]["text"]) and SUP_CHAR_RE.match(txt)))
+                )
+                if can_coalesce:
+                    spans[-1]["text"] += txt
+                else:
+                    spans.append({"text": txt, "is_sup": sup})
+            for span in spans:
+                r_txt = span["text"]
+                if span["is_sup"] and SUP_CIT.match(r_txt):
                     prev_char = combined[-1:] if combined else ""
                     if prev_char and not prev_char.isdigit():
                         if not (prev_char in EXPONENT_PREV_CHARS and r_txt in ('2', '3', '4')) and not any(combined.rstrip().lower().endswith(w) for w in EXPONENT_PREV_WORDS):
@@ -310,7 +323,7 @@ def profile_document_citation_format(
                 continue
             if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
                 continue
-            inner = m.group(1).replace('–', '-')
+            inner = m.group(1).replace('–', '-').replace('—', '-').replace('−', '-')
             parts = [p.strip() for p in re.split(r'\s*,\s*', inner) if p.strip()]
             if parts and all(re.match(r'^\d{1,3}(?:-\d{1,3})?$', pt) for pt in parts):
                 if any(int(pt.split('-')[0]) >= 1900 for pt in parts):
@@ -323,7 +336,7 @@ def profile_document_citation_format(
                 continue
             if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
                 continue
-            inner = m.group(1).replace('–', '-')
+            inner = m.group(1).replace('–', '-').replace('—', '-').replace('−', '-')
             parts = [p.strip() for p in re.split(r'\s*,\s*', inner) if p.strip()]
             if parts and all(re.match(r'^\d{1,3}(?:-\d{1,3})?$', pt) for pt in parts):
                 if any(int(pt.split('-')[0]) >= 1900 for pt in parts):
@@ -331,13 +344,7 @@ def profile_document_citation_format(
                 paren_count += 1
 
     # Dominant format determination
-    if sup_count >= 3 and sup_count >= bracket_count and (paren_count == 0 or sup_count >= 2 * paren_count):
-        return "sup"
-    if bracket_count >= 3 and bracket_count >= paren_count:
-        return "bracket"
-    if paren_count >= 3 and sup_count == 0 and bracket_count == 0:
-        return "paren"
-    if sup_count >= 2 and paren_count >= 2:
+    if (sup_count > 0 and bracket_count > 0) or (sup_count > 0 and paren_count > 0) or (bracket_count > 0 and paren_count > 0):
         return "mixed"
     if sup_count > 0:
         return "sup"
@@ -393,8 +400,13 @@ def parse_docx_manuscript(
     # Extract active text per paragraph without modifying or accepting revisions
     para_texts = []
     for p in doc.paragraphs:
-        t_nodes = p._p.xpath('.//w:t[not(ancestor::w:del)]/text()')
-        para_texts.append("".join(t_nodes))
+        parts = []
+        for node in p._p.xpath('.//*[local-name()="t" or local-name()="br"][not(ancestor::*[local-name()="del"])]'):
+            if node.tag.endswith('br'):
+                parts.append('\n')
+            else:
+                parts.append(node.text or '')
+        para_texts.append("".join(parts))
 
     return parse_paragraphs_list(para_texts, doc, citation_format=citation_format)
 
@@ -423,32 +435,35 @@ def parse_paragraphs_list(
     references: List[ReferenceEntry] = []
     if ref_hdr_idx is not None:
         for idx in range(ref_hdr_idx, len(para_texts)):
-            line = para_texts[idx].strip()
-            if not line:
+            raw_para = para_texts[idx].strip()
+            if not raw_para:
                 continue
             # Stop if a post-reference section begins (e.g. Supplementary, Figures, Tables)
-            if idx > ref_hdr_idx and POST_REF_HEADER.match(line) and len(references) > 0:
+            if idx > ref_hdr_idx and POST_REF_HEADER.match(raw_para) and len(references) > 0:
                 break
-            m = REF_START.match(line)
-            if m:
-                r_num = int(m.group(1))
-                content = m.group(2)
-                # Verify it is an authentic bibliographic reference and not a clinical sentence or heading
-                if is_authentic_bibliographic_reference(content) or (idx + 1 < len(para_texts) and (REF_START.match(para_texts[idx+1].strip()) and is_authentic_bibliographic_reference(para_texts[idx+1].strip()))):
-                    references.append(parse_reference_line(r_num, content))
-            elif references:
-                # Multi-line reference continuation: check if next paragraph is wrapped DOI / PMID / URL
-                if DOI_RE.search(line) or FALLBACK_DOI_RE.search(line) or PMID_RE.search(line):
-                    last_ref = references[-1]
-                    last_ref.raw_text += " " + line
-                    if not last_ref.doi:
-                        last_ref.doi = clean_doi(line)
-                    if not last_ref.pmid:
-                        pm = PMID_RE.search(line)
-                        if pm:
-                            last_ref.pmid = pm.group(1)
+            # Split raw_para by newlines if multiple lines were pasted into a single paragraph
+            sub_lines = [l.strip() for l in re.split(r'\r?\n', raw_para) if l.strip()]
+            for line in sub_lines:
+                m = REF_START.match(line)
+                if m:
+                    r_num = int(m.group(1))
+                    content = m.group(2)
+                    # Verify it is an authentic bibliographic reference and not a clinical sentence or heading
+                    if is_authentic_bibliographic_reference(content) or (idx + 1 < len(para_texts) and (REF_START.match(para_texts[idx+1].strip()) and is_authentic_bibliographic_reference(para_texts[idx+1].strip()))):
+                        references.append(parse_reference_line(r_num, content))
+                elif references:
+                    # Multi-line reference continuation: check if next paragraph is wrapped DOI / PMID / URL
+                    if DOI_RE.search(line) or FALLBACK_DOI_RE.search(line) or PMID_RE.search(line):
+                        last_ref = references[-1]
+                        last_ref.raw_text += " " + line
+                        if not last_ref.doi:
+                            last_ref.doi = clean_doi(line)
+                        if not last_ref.pmid:
+                            pm = PMID_RE.search(line)
+                            if pm:
+                                last_ref.pmid = pm.group(1)
 
-    n_refs = len(references) if references else 999
+    n_refs = max(r.ref_num for r in references) if references else 999
 
     # Determine effective citation format via Pass 1 profiling if auto
     effective_format = citation_format
@@ -477,13 +492,38 @@ def parse_paragraphs_list(
         # If docx is provided, we can inspect run superscript formatting
         if doc is not None and pi < len(doc.paragraphs):
             p_obj = doc.paragraphs[pi]
-            combined_prev = ""
             active_runs = [docx.text.run.Run(r_el, p_obj) for r_el in p_obj._p.xpath('.//w:r[not(ancestor::w:del)]')]
+
+            # Coalesce adjacent runs sharing identical superscript status
+            spans = []
             for ri, r in enumerate(active_runs):
-                r_txt = r.text or ""
-                # 1. Superscript check
-                if effective_format in ("auto", "sup", "mixed") and is_superscript(r) and SUP_CIT.match(r_txt):
-                    inner = r_txt.replace('–', '-')
+                txt = r.text or ""
+                sup = is_superscript(r)
+                can_coalesce = (
+                    spans and spans[-1]["is_sup"] == sup and
+                    (not sup or (SUP_CHAR_RE.match(spans[-1]["text"]) and SUP_CHAR_RE.match(txt)))
+                )
+                if can_coalesce:
+                    spans[-1]["text"] += txt
+                    spans[-1]["end_run_idx"] = ri
+                    spans[-1]["runs"].append(r)
+                else:
+                    spans.append({
+                        "text": txt,
+                        "is_sup": sup,
+                        "start_run_idx": ri,
+                        "end_run_idx": ri,
+                        "runs": [r]
+                    })
+
+            # 1. Superscript check over coalesced spans
+            combined_prev = ""
+            for span in spans:
+                r_txt = span["text"]
+                ri = span["start_run_idx"]
+                end_ri = span["end_run_idx"]
+                if effective_format in ("auto", "sup", "mixed") and span["is_sup"] and SUP_CIT.match(r_txt):
+                    inner = r_txt.replace('–', '-').replace('—', '-').replace('−', '-')
                     nums = []
                     for part in re.split(r'\s*,\s*', inner):
                         if '-' in part:
@@ -514,6 +554,7 @@ def parse_paragraphs_list(
                         sites.append(CitationSite(
                             paragraph_idx=pi,
                             run_idx=ri,
+                            end_run_idx=end_ri,
                             kind="sup",
                             text=r_txt,
                             context_before=combined_prev[-40:],
@@ -522,103 +563,122 @@ def parse_paragraphs_list(
                             match_start=m_start,
                             match_end=m_start + len(r_txt)
                         ))
-                
-                # 2. Bracket check [1, 2]
-                if effective_format in ("auto", "bracket") and BRACKET_CIT.search(r_txt):
-                    for m in BRACKET_CIT.finditer(r_txt):
-                        context_prior = (combined_prev + r_txt[:m.start()]).rstrip()
-                        if NON_CITATION_PRECEDING_WORDS.search(context_prior) or CLINICAL_SCALE_RE.search(context_prior[-60:]):
-                            continue
-                        if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
-                            continue
-                        inner = m.group(1).replace('–', '-')
-                        nums = []
-                        for part in re.split(r'\s*,\s*', inner):
-                            if '-' in part:
-                                sp = part.split('-')
-                                if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
-                                    nums.extend(range(int(sp[0]), int(sp[1]) + 1))
-                            elif part.strip().isdigit():
-                                nums.append(int(part))
-                        if any(n >= 1900 for n in nums):
-                            continue
-                        if nums and (n_refs == 999 or max(nums) <= n_refs):
-                            global_start = len(combined_prev) + m.start()
-                            sent = extract_surrounding_sentence(p_text, global_start, global_start + len(m.group(0)))
-                            sites.append(CitationSite(
-                                paragraph_idx=pi,
-                                run_idx=ri,
-                                kind="bracket",
-                                text=m.group(0),
-                                context_before=p_text[max(0, global_start - 40):global_start],
-                                sentence=sent,
-                                nums=sorted(set(nums)),
-                                match_start=global_start,
-                                match_end=global_start + len(m.group(0))
-                            ))
-
-                # 3. Parenthetical check (1, 2)
-                if effective_format in ("auto", "paren", "mixed") and PAREN_CIT.search(r_txt):
-                    for m in PAREN_CIT.finditer(r_txt):
-                        # Guard against clinical nouns e.g. "patients (12)", "years (1-5)"
-                        context_prior = (combined_prev + r_txt[:m.start()]).rstrip()
-                        if NON_CITATION_PRECEDING_WORDS.search(context_prior) or CLINICAL_SCALE_RE.search(context_prior[-60:]):
-                            continue
-                        if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
-                            continue
-                        # Guard against enumerated lists e.g. "(1) We analyzed..."
-                        sentence_start_check = r_txt[m.start():m.end() + 20]
-                        if ENUMERATED_LIST_START.match(sentence_start_check) and not context_prior:
-                            continue
-
-                        inner = m.group(1).replace('–', '-')
-                        nums = []
-                        has_zero = False
-                        for part in re.split(r'\s*,\s*', inner):
-                            if '-' in part:
-                                sp = part.split('-')
-                                if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
-                                    s0, s1 = int(sp[0]), int(sp[1])
-                                    if s0 <= 0 or s1 <= 0:
-                                        has_zero = True
-                                        break
-                                    nums.extend(range(s0, s1 + 1))
-                            elif part.strip().isdigit():
-                                val = int(part)
-                                if val <= 0:
-                                    has_zero = True
-                                    break
-                                nums.append(val)
-                        if has_zero or not nums:
-                            continue
-                        if any(n >= 1900 for n in nums):
-                            continue
-                        if nums and (n_refs == 999 or max(nums) <= n_refs):
-                            global_start = len(combined_prev) + m.start()
-                            sent = extract_surrounding_sentence(p_text, global_start, global_start + len(m.group(0)))
-                            sites.append(CitationSite(
-                                paragraph_idx=pi,
-                                run_idx=ri,
-                                kind="paren",
-                                text=m.group(0),
-                                context_before=p_text[max(0, global_start - 40):global_start],
-                                sentence=sent,
-                                nums=sorted(set(nums)),
-                                match_start=global_start,
-                                match_end=global_start + len(m.group(0))
-                            ))
                 combined_prev += r_txt
-        else:
-            # Plain text parsing
-            # 1. Bracket check
-            if effective_format in ("auto", "bracket"):
+
+            # Helper to map paragraph character offsets to run index range
+            def find_run_span(m_start: int, m_end: int):
+                run_i = 0
+                end_run_i = 0
+                cur_pos = 0
+                for r_idx, r_el in enumerate(active_runs):
+                    r_len = len(r_el.text or "")
+                    if cur_pos <= m_start < cur_pos + r_len:
+                        run_i = r_idx
+                    if cur_pos < m_end <= cur_pos + r_len:
+                        end_run_i = r_idx
+                        break
+                    cur_pos += r_len
+                return run_i, end_run_i
+
+            # 2. Bracket check [1, 2] across paragraph text
+            if effective_format in ("auto", "bracket", "mixed"):
                 for m in BRACKET_CIT.finditer(p_text):
                     context_prior = p_text[:m.start()].rstrip()
                     if NON_CITATION_PRECEDING_WORDS.search(context_prior) or CLINICAL_SCALE_RE.search(context_prior[-60:]):
                         continue
                     if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
                         continue
-                    inner = m.group(1).replace('–', '-')
+                    inner = m.group(1).replace('–', '-').replace('—', '-').replace('−', '-')
+                    nums = []
+                    for part in re.split(r'\s*,\s*', inner):
+                        if '-' in part:
+                            sp = part.split('-')
+                            if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
+                                nums.extend(range(int(sp[0]), int(sp[1]) + 1))
+                        elif part.strip().isdigit():
+                            nums.append(int(part))
+                    if any(n >= 1900 for n in nums):
+                        continue
+                    if nums and (n_refs == 999 or max(nums) <= n_refs):
+                        global_start = m.start()
+                        global_end = m.end()
+                        sent = extract_surrounding_sentence(p_text, global_start, global_end)
+                        run_i, end_run_i = find_run_span(global_start, global_end)
+                        sites.append(CitationSite(
+                            paragraph_idx=pi,
+                            run_idx=run_i,
+                            end_run_idx=end_run_i,
+                            kind="bracket",
+                            text=m.group(0),
+                            context_before=p_text[max(0, global_start - 40):global_start],
+                            sentence=sent,
+                            nums=sorted(set(nums)),
+                            match_start=global_start,
+                            match_end=global_end
+                        ))
+
+            # 3. Parenthetical check (1, 2) across paragraph text
+            if effective_format in ("auto", "paren", "mixed"):
+                for m in PAREN_CIT.finditer(p_text):
+                    context_prior = p_text[:m.start()].rstrip()
+                    if NON_CITATION_PRECEDING_WORDS.search(context_prior) or CLINICAL_SCALE_RE.search(context_prior[-60:]):
+                        continue
+                    if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
+                        continue
+                    sentence_start_check = p_text[m.start():m.end() + 20]
+                    if ENUMERATED_LIST_START.match(sentence_start_check) and not context_prior:
+                        continue
+
+                    inner = m.group(1).replace('–', '-').replace('—', '-').replace('−', '-')
+                    nums = []
+                    has_zero = False
+                    for part in re.split(r'\s*,\s*', inner):
+                        if '-' in part:
+                            sp = part.split('-')
+                            if len(sp) == 2 and sp[0].strip().isdigit() and sp[1].strip().isdigit():
+                                s0, s1 = int(sp[0]), int(sp[1])
+                                if s0 <= 0 or s1 <= 0:
+                                    has_zero = True
+                                    break
+                                nums.extend(range(s0, s1 + 1))
+                        elif part.strip().isdigit():
+                            val = int(part)
+                            if val <= 0:
+                                has_zero = True
+                                break
+                            nums.append(val)
+                    if has_zero or not nums:
+                        continue
+                    if any(n >= 1900 for n in nums):
+                        continue
+                    if nums and (n_refs == 999 or max(nums) <= n_refs):
+                        global_start = m.start()
+                        global_end = m.end()
+                        sent = extract_surrounding_sentence(p_text, global_start, global_end)
+                        run_i, end_run_i = find_run_span(global_start, global_end)
+                        sites.append(CitationSite(
+                            paragraph_idx=pi,
+                            run_idx=run_i,
+                            end_run_idx=end_run_i,
+                            kind="paren",
+                            text=m.group(0),
+                            context_before=p_text[max(0, global_start - 40):global_start],
+                            sentence=sent,
+                            nums=sorted(set(nums)),
+                            match_start=global_start,
+                            match_end=global_end
+                        ))
+        else:
+            # Plain text parsing
+            # 1. Bracket check
+            if effective_format in ("auto", "bracket", "mixed"):
+                for m in BRACKET_CIT.finditer(p_text):
+                    context_prior = p_text[:m.start()].rstrip()
+                    if NON_CITATION_PRECEDING_WORDS.search(context_prior) or CLINICAL_SCALE_RE.search(context_prior[-60:]):
+                        continue
+                    if NON_CITATION_INNER_CONTENT.search(m.group(0)[1:-1]):
+                        continue
+                    inner = m.group(1).replace('–', '-').replace('—', '-').replace('−', '-')
                     nums = []
                     has_zero = False
                     for part in re.split(r'\s*,\s*', inner):
@@ -666,7 +726,7 @@ def parse_paragraphs_list(
                     if ENUMERATED_LIST_START.match(trailing) and not context_prior:
                         continue
 
-                    inner = m.group(1).replace('–', '-')
+                    inner = m.group(1).replace('–', '-').replace('—', '-').replace('−', '-')
                     nums = []
                     has_zero = False
                     for part in re.split(r'\s*,\s*', inner):

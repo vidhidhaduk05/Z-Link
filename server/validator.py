@@ -115,7 +115,11 @@ def query_crossref(doi: str) -> Dict:
         return {}
 
 def check_title_similarity(target_title: str, candidate_title: str) -> float:
-    """Compute Jaccard word overlap ratio between reference title and candidate title."""
+    """
+    Compute title similarity robust to subtitles, journal metadata, and formatting differences.
+    Combines Dice coefficient with containment ratio so that matching titles with long subtitles
+    are not falsely rejected.
+    """
     if not target_title or not candidate_title:
         return 0.0
     clean_target = set(re.findall(r'\b[a-z]{3,}\b', target_title.lower()))
@@ -123,8 +127,13 @@ def check_title_similarity(target_title: str, candidate_title: str) -> float:
     if not clean_target or not clean_cand:
         return 0.0
     common = clean_target.intersection(clean_cand)
-    union = clean_target.union(clean_cand)
-    return len(common) / len(union)
+    if not common:
+        return 0.0
+    dice = (2.0 * len(common)) / (len(clean_target) + len(clean_cand))
+    containment = len(common) / min(len(clean_target), len(clean_cand))
+    if containment >= 0.8:
+        return max(dice, containment * 0.9)
+    return dice
 
 def search_crossref_bibliographic(raw_text: str, title: str = "", authors: List[str] = None) -> Tuple[str, Dict]:
     """

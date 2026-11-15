@@ -286,14 +286,43 @@ POST_REF_HEADER_RE = re.compile(
     r'^\s*(?:Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)',
     re.I
 )
-REF_START_RE = re.compile(r'^(\d{1,3})\.\s*(.*)$')
+REF_START_RE = re.compile(r'^\s*[\(\[]?(\d{1,3})[\)\]\.)]\.?\s*(.*)$', re.DOTALL)
+
+def split_multiline_reference_paragraphs(doc, start_idx: int, end_idx: int) -> Tuple[int, int]:
+    """
+    If any paragraph in candidate_paras contains multiple references separated
+    by line breaks (e.g. pasted references in one paragraph with \\n or <w:br/>),
+    splits them into distinct <w:p> paragraphs in the document so each reference
+    can be independently renumbered, sorted, and enclosed by Zotero fields.
+    Returns the updated (start_idx, end_idx).
+    """
+    current_end = end_idx
+    i = start_idx
+    while i < current_end and i < len(doc.paragraphs):
+        p = doc.paragraphs[i]
+        lines = [line.strip() for line in re.split(r'\r?\n', p.text) if line.strip()]
+        ref_matches = [REF_START_RE.match(l) for l in lines]
+        valid_ref_count = sum(1 for m in ref_matches if m is not None)
+        if len(lines) > 1 and valid_ref_count >= 2:
+            parent = p._p.getparent()
+            p_idx = parent.index(p._p)
+            for idx, line in enumerate(lines):
+                new_p = doc.add_paragraph(line)
+                parent.insert(p_idx + idx, new_p._p)
+            parent.remove(p._p)
+            current_end += (len(lines) - 1)
+            i += len(lines)
+        else:
+            i += 1
+    return start_idx, current_end
 
 class AtomicReferenceBlock:
-    def __init__(self, old_n: int, new_n: int, primary_para, match_obj):
+    def __init__(self, old_n: int, new_n: int, primary_para, match_obj, old_prefix: str = ""):
         self.old_n = old_n
         self.new_n = new_n
         self.primary_para = primary_para
         self.match_obj = match_obj
+        self.old_prefix = old_prefix
         self.paragraphs = [primary_para]
 
 def find_reference_section_bounds(doc) -> Tuple[Optional[int], int, int]:
@@ -359,7 +388,9 @@ def extract_atomic_reference_blocks(
         if m:
             old_n = int(m.group(1))
             new_n = mapping.get(old_n, old_n)
-            current_block = AtomicReferenceBlock(old_n, new_n, p, m)
+            content = m.group(2)
+            prefix = txt[:len(txt) - len(content)].strip()
+            current_block = AtomicReferenceBlock(old_n, new_n, p, m, old_prefix=prefix)
             blocks.append(current_block)
         elif current_block is not None:
             current_block.paragraphs.append(p)
@@ -680,6 +711,11 @@ def link_docx_manuscript(
         is_sup = in_text_res["is_superscript"]
 
         active_runs = [docx.text.run.Run(r_el, p) for r_el in p._p.xpath('.//w:r[not(ancestor::w:del)]')]
+        # If this site coalesced across multiple runs, empty trailing runs so they don't leave residue
+        if getattr(s, 'end_run_idx', None) is not None and s.end_run_idx > s.run_idx:
+            for extra_idx in range(s.run_idx + 1, min(s.end_run_idx + 1, len(active_runs))):
+                active_runs[extra_idx].text = ""
+
         if s.kind in ('paren', 'bracket') and s.match_start is not None and s.match_end is not None:
             if s.run_idx < len(active_runs):
                 sup_el = convert_paren_site(
@@ -754,6 +790,7 @@ def link_docx_manuscript(
 
     # Reorder and renumber bibliography paragraphs in the Word XML
     header_idx, start_idx, end_idx = find_reference_section_bounds(doc)
+    start_idx, end_idx = split_multiline_reference_paragraphs(doc, start_idx, end_idx)
     candidate_paras = doc.paragraphs[start_idx:end_idx]
     blocks = extract_atomic_reference_blocks(candidate_paras, mapping)
 
@@ -765,8 +802,13 @@ def link_docx_manuscript(
             p = b.primary_para
             m = b.match_obj
 
-            old_prefix = f"{old_n}."
-            new_prefix = f"{new_n}."
+            old_prefix = getattr(b, 'old_prefix', '') or f"{old_n}."
+            if target_style == "ieee":
+                new_prefix = f"[{new_n}]"
+            elif target_style in ("apa", "harvard"):
+                new_prefix = ""
+            else:
+                new_prefix = f"{new_n}."
             rest_content = m.group(2)
 
             # Check if reference has a recovered DOI that should be added
@@ -809,9 +851,15 @@ def link_docx_manuscript(
                         indent = l_txt[:len(l_txt) - len(l_stripped)]
                         if l_stripped.startswith(old_prefix):
                             after_prefix = l_stripped[len(old_prefix):]
+                            if new_prefix and not after_prefix.startswith((' ', '\t')):
+                                formatted_new_prefix = new_prefix + " "
+                            else:
+                                formatted_new_prefix = new_prefix
+                            if not new_prefix:
+                                after_prefix = after_prefix.lstrip()
                             leading_run.text = indent
                             del_el = make_del_element(old_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=leading_run)
-                            ins_el = make_ins_element(new_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=leading_run)
+                            ins_el = make_ins_element(formatted_new_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=leading_run)
                             leading_run._r.addnext(del_el)
                             del_el.addnext(ins_el)
                             if after_prefix:
@@ -854,7 +902,13 @@ def link_docx_manuscript(
                         indent = l_txt[:len(l_txt) - len(l_stripped)]
                         if l_stripped.startswith(old_prefix):
                             after_prefix = l_stripped[len(old_prefix):]
-                            leading_run.text = indent + new_prefix + after_prefix
+                            if new_prefix and not after_prefix.startswith((' ', '\t')):
+                                formatted_new_prefix = new_prefix + " "
+                            else:
+                                formatted_new_prefix = new_prefix
+                            if not new_prefix:
+                                after_prefix = after_prefix.lstrip()
+                            leading_run.text = indent + formatted_new_prefix + after_prefix
                             replaced = True
 
                     if not replaced and p.runs:
