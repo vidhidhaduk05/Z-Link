@@ -1226,6 +1226,93 @@ class TestZoteroLinkEngine(unittest.TestCase):
             bibl_instr_count = sum(len(p._p.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')) for p in a_doc.paragraphs)
             self.assertEqual(bibl_instr_count, 1, "Must contain exactly 1 ADDIN ZOTERO_BIBL field (no duplicates)")
 
+    def test_43_preview_citation_offsets_and_clinical_immunity(self):
+        """
+        Verifies that citation site matching and preview rendering maintain absolute immunity
+        for clinical numbers, patient counts, percentages, and genetic codons:
+        1. Exact character offsets (match_start, match_end) are strictly grounded.
+        2. Numbers appearing earlier in the sentence ('13 patients', 'p.Arg179', '95.7%')
+           are never corrupted or wrapped in citation pills.
+        3. Real-world ACTA2 manuscript paragraphs (P52, P68, P80, P83, P84) render with zero
+           false-positive pill injections.
+        """
+        acta2_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(acta2_path):
+            self.skipTest("ACTA2 manuscript file not present")
+
+        paras, sites, refs = parse_docx_manuscript(acta2_path)
+
+        def render_preview_paragraph(text, p_sites):
+            # Mirror the exact app.js grounded offset slicing algorithm
+            sorted_sites = sorted(p_sites, key=lambda s: s.match_start if hasattr(s, 'match_start') and s.match_start is not None else 0)
+            fragments = []
+            last_idx = 0
+            for s in sorted_sites:
+                start = getattr(s, 'match_start', None)
+                end = getattr(s, 'match_end', None)
+                if start is not None and end is not None and start >= last_idx and end <= len(text) and text[start:end] == s.text:
+                    pass
+                else:
+                    pos = -1
+                    if s.context_before:
+                        anchor = s.context_before.strip()[-25:]
+                        if anchor and anchor in text[last_idx:]:
+                            anchor_pos = text.find(anchor, last_idx)
+                            candidate = anchor_pos + len(anchor)
+                            if text.startswith(s.text, candidate):
+                                pos = candidate
+                            elif s.text in text[candidate:candidate+6]:
+                                pos = candidate + text[candidate:candidate+6].find(s.text)
+                    if pos == -1:
+                        pos = text.find(s.text, last_idx)
+                    if pos != -1 and pos >= last_idx:
+                        start = pos
+                        end = pos + len(s.text)
+                    else:
+                        continue
+                if start > last_idx:
+                    fragments.append(text[last_idx:start])
+                fragments.append(f'<span class="cit-pill" data-nums="{",".join(map(str, s.nums))}">{s.text}</span>')
+                last_idx = end
+            if last_idx < len(text):
+                fragments.append(text[last_idx:])
+            return "".join(fragments)
+
+        # 1. Inspect P52: must contain "13 patients" as pure text, not "1<span class="cit-pill">3</span> patients"
+        p52_text = paras[52]
+        p52_sites = [s for s in sites if s.paragraph_idx == 52]
+        p52_html = render_preview_paragraph(p52_text, p52_sites)
+        self.assertIn("13 patients", p52_html, "P52 must contain '13 patients' as plain text")
+        self.assertNotIn('1<span class="cit-pill"', p52_html, "P52 must not turn '13 patients' into a pill")
+        self.assertIn("p.Arg179", p52_html, "P52 must contain 'p.Arg179' intact")
+
+        # 2. Inspect P68: must contain "40 females", "15 males", "5 patients", "11 patients", "47 of 60 patients" as pure text
+        p68_text = paras[68]
+        p68_sites = [s for s in sites if s.paragraph_idx == 68]
+        p68_html = render_preview_paragraph(p68_text, p68_sites)
+        self.assertIn("11 patients", p68_html, "P68 must contain '11 patients' as plain text")
+        self.assertIn("47 of 60 patients", p68_html, "P68 must contain '47 of 60 patients' as plain text")
+        self.assertIn('<span class="cit-pill" data-nums="39">39</span>', p68_html, "P68 must correctly wrap citation 39")
+
+        # 3. Inspect P80: must contain "95.7%" and "76.7%" as pure text, not corrupted by citations 5, 6
+        p80_text = paras[80]
+        p80_sites = [s for s in sites if s.paragraph_idx == 80]
+        p80_html = render_preview_paragraph(p80_text, p80_sites)
+        self.assertIn("95.7%", p80_html, "P80 must contain '95.7%' as plain text")
+        self.assertIn("76.7%", p80_html, "P80 must contain '76.7%' as plain text")
+
+        # 4. Inspect P83: must contain "57.1%" as pure text
+        p83_text = paras[83]
+        p83_sites = [s for s in sites if s.paragraph_idx == 83]
+        p83_html = render_preview_paragraph(p83_text, p83_sites)
+        self.assertIn("57.1%", p83_html, "P83 must contain '57.1%' as plain text")
+
+        # 5. Inspect P84: must contain "43.3%" as pure text
+        p84_text = paras[84]
+        p84_sites = [s for s in sites if s.paragraph_idx == 84]
+        p84_html = render_preview_paragraph(p84_text, p84_sites)
+        self.assertIn("43.3%", p84_html, "P84 must contain '43.3%' as plain text")
+
 if __name__ == "__main__":
     unittest.main()
 

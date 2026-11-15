@@ -192,24 +192,33 @@
   5. Added an interactive "View Full Audit Report" modal in `index.html` with clipboard copy and print/PDF formatting.
 - **Verification**: Verified via `test_40_missing_doi_insertion_in_tracked_docx`, `test_41_in_document_audit_table_generation` (41/41 unit tests pass), and headless Chrome CDP live test (`test_browser_audit_and_doi_recovery.py`) confirming real-time UI recovery, modal display, and valid XML insertion of recovered DOI and audit table.
 
-### [2026-11-15 13:10] ARCH-DECISION-017: Multi-Paragraph Zotero Bibliography Field Enclosure
-- **Context**: User requested: *"THR REFRENCES LIST DOES NOT APPEAR TO BE LINKED , LIKE WHEN ZOTERO MAKE IT IT LOOKS LINKED.. ASK ME IF YO CHECK HOW ZOTERO DOES THIS U HAVE ANY QUESTIONS , CAN YOU"*.
+### [2026-11-15 13:20] ARCH-DECISION-018: Grounded Offset Paragraph Re-Assembly & Clinical Number Immunity in Manuscript Preview
+- **Context**: User reported: *"Manuscript Preview & Citation Sites, HERE THE CITATIONS ARE APPEARING WRONG , THE PREVIEW SHOULD BE CORRECT, FOR EXAMPLE IN THE DOCUMENT THE PARITENT COUNT WAS NOT IDENTIFIES ADAS REFRENCE BUT IN THIS IT WAS , SO THAT IT MISLEADS MAKE SURE IT IS THE CORRECT PREVIEW"*.
 - **Root Cause & Technical Constraints**:
-  1. In `server/linker.py` and `static/js/docx_engine.js`, `inject_bibliography_field()` previously injected a self-contained collapsed field (`begin -> instr -> separate -> end`) inside the single `REFERENCES` heading paragraph alone.
-  2. The actual reference paragraphs (`1. ...`, `2. ...`) sat outside the field tags as plain, unlinked paragraphs.
-  3. Clicking on any reference in Word showed plain text with zero field shading, and Zotero Word integration did not recognize the bibliography.
-  4. In Tracked Changes mode (`track_changes=True`), the bibliography field was previously skipped entirely (`if not track_changes:`).
-  5. In `static/js/docx_engine.js`, DOM reordering with a static `anchorNode` inserted all blocks before reference 1, leaving reference 1 out of order at the bottom.
+  1. In `static/js/app.js:540`, `renderManuscriptExplorer()` iterated through detected citation sites and performed naive global replacement: `html = html.replace(s.text, pill)`.
+  2. Because `String.prototype.replace(string, ...)` always matches the first occurrence from the beginning of the string, any preceding numbers sharing digits with citations (e.g. `13 patients`, `95.7%`, `43.3%`, `p.Arg179`, `57.1%`) were corrupted into citation pills. For example, in Paragraph 52 of `ACTA2_Manuscript_11.14.2026.docx`, `"13 patients"` had its `"3"` converted into a citation pill for Reference 3 (cited at the end of the paragraph), misleading the user into thinking the parser had tagged a patient count.
+  3. In `static/js/docx_engine.js`, superscript citation sites did not record `match_start` and `match_end`. For brackets and parens, offsets were local to the run `rText` rather than global to `pText`.
+  4. In `static/js/docx_engine.js`, citation site `sentence` was truncated to `pText.slice(0, 120)` instead of extracting the actual surrounding sentence.
 - **Decision & Implementation**:
-  1. Reverse-engineered authentic Zotero multi-paragraph bibliography OOXML structure from `ACTA2_Manuscript_11.14.2026.docx`: the `ADDIN ZOTERO_BIBL` field begins in the `REFERENCES` header paragraph (`begin`, `CSL_BIBL` schema instruction, `separate`), encloses all reference paragraphs (1..N), and closes with `end` at the end of the bibliography.
-  2. Implemented `strip_existing_bibliography_fields()` in both Python and JS to clean pre-existing Zotero field runs before injection, preventing duplicate or corrupt fields.
-  3. Re-architected `inject_bibliography_field()` to take `last_para`:
-     - If an empty paragraph already follows the references, `end` is inserted into it (preserving original paragraph count, such as 176 paragraphs in ACTA2).
-     - Otherwise, `end` is appended before any `<w:sectPr>` at the end of the final reference paragraph without inflating paragraph counts.
-  4. Enabled authentic bibliography field enclosure across BOTH clean and tracked changes modes.
-  5. Fixed DOM insertion traversal in `static/js/docx_engine.js` so blocks reorder consecutively after the header in sequential AMA order.
-  6. Ensured in-text citation field tags safely resolve their `targetParent` (`targetAnchor.parentNode || p`).
-- **Verification**: Verified via `test_42_zotero_bibliography_field_enclosure` (all 42/42 unit tests pass) and headless Chrome CDP automation test (`test_browser_zotero_bibl_field.py`), empirically confirming that both clean and tracked docx deliverables contain authentic multi-paragraph Zotero bibliography field enclosure with all 5/5 references inside.
+  1. **Engine Parity & Global Offset Tracking**: Updated `static/js/docx_engine.js` so that superscripts, brackets, and parentheticals record exact global paragraph offsets (`match_start`, `match_end`) and extract the authentic surrounding sentence via `extractSurroundingSentence(pText, matchStart, matchEnd)`.
+  2. **Monotonic Forward Segmenter in `renderManuscriptExplorer()`**: Eliminated `html.replace()`. Paragraph HTML is now assembled monotonically:
+     - Sites are sorted by `match_start` ascending.
+     - Text prior to each citation site is sliced directly from `pText` and HTML-escaped via `escapeHtml()`.
+     - The citation site is wrapped in `<span class="cit-pill${s.kind === 'sup' ? ' cit-sup' : ''}" data-nums="...">...</span>`.
+     - Trailing text after the final citation is sliced and escaped.
+     - Implemented anchor-grounded recovery (`s.context_before`) for drifted offsets, strictly bounded forward from `lastIdx` to eliminate any backward string replacement collisions.
+  3. **Visual Enhancement**: Styled `.cit-pill.cit-sup` in `static/css/master-theme.css` with `vertical-align: super; font-size: 0.8em; border-radius: 3px;`, perfectly rendering superscript citations in the Academic Master Theme.
+  4. **Active Card Highlighting**: Enhanced `highlightSentenceInManuscript()` so clicking a reference card lights up the matching citation pill in the manuscript preview with `.active`.
+- **Verification**:
+  - Unit Tests: Added `test_43_preview_citation_offsets_and_clinical_immunity` to `tests/test_engine.py` (all 43/43 unit tests passing).
+  - Headless Chrome CDP Live Test: Empirically verified against live browser DOM on `http://localhost:8765/` loading `ACTA2_Manuscript_11.14.2026.docx`:
+    - Paragraph 52: `"13 patients"` is 100% intact as plain text; citations `'5'`, `'6'`, `'7'`, `'3'` are exact `.cit-pill.cit-sup` elements.
+    - Paragraph 68: `"11 patients"` and `"47 of 60 patients"` are pure text; citation `'39'` is correctly wrapped.
+    - Paragraph 80: `"95.7%"` and `"76.7%"` are pure text; citations are exact pills.
+    - Paragraph 83: `"57.1%"` is pure text; citation `'7'` is correctly wrapped.
+    - Paragraph 84: `"43.3%"` is pure text; citation `'3'` is correctly wrapped.
+    - Total 33 citation pills rendered with 100% precision.
+
 
 
 

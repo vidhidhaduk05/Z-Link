@@ -172,6 +172,7 @@ if (citationFormatSelect && customFormatInput) {
 // ---------------- Pipeline Execution ----------------
 
 async function handleFileSelected(file) {
+  window.handleFileSelected = handleFileSelected;
   if (!file.name.toLowerCase().endsWith('.docx')) {
     alert("Please upload a Microsoft Word document (.docx).");
     return;
@@ -275,6 +276,7 @@ async function handleFileSelected(file) {
   appState.fsmState = 'READY';
   setStepper('ready');
 }
+window.handleFileSelected = handleFileSelected;
 
 function computeUsageMappings() {
   const { references, sites, paraTexts } = appState.parsedData;
@@ -515,6 +517,16 @@ function updateAuditTableRow(refNum) {
   setTimeout(() => tr.classList.remove('row-updated'), 700);
 }
 
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function renderManuscriptExplorer() {
   manuscriptViewer.innerHTML = '';
   const { paraTexts, sites, refHdrIdx } = appState.parsedData;
@@ -534,13 +546,83 @@ function renderManuscriptExplorer() {
     if (pSites.length === 0) {
       pDiv.textContent = text;
     } else {
-      let html = text;
-      // Replace citation texts with interactive pills
-      pSites.forEach(s => {
-        const pill = `<span class="cit-pill" data-nums="${s.nums.join(',')}" title="Cited references: ${s.nums.join(', ')}">${s.text}</span>`;
-        html = html.replace(s.text, pill);
+      // Grounded Offset Slicing:
+      // Sort sites by match_start ascending so replacements never collide or misalign
+      const sortedSites = [...pSites].sort((a, b) => {
+        const aStart = typeof a.match_start === 'number' ? a.match_start : 0;
+        const bStart = typeof b.match_start === 'number' ? b.match_start : 0;
+        return aStart - bStart;
       });
-      pDiv.innerHTML = html;
+
+      const fragments = [];
+      let lastIdx = 0;
+
+      for (const s of sortedSites) {
+        let start = s.match_start;
+        let end = s.match_end;
+
+        const hasValidOffset = (
+          typeof start === 'number' &&
+          typeof end === 'number' &&
+          start >= lastIdx &&
+          end <= text.length &&
+          text.slice(start, end) === s.text
+        );
+
+        if (!hasValidOffset) {
+          // Precise anchor-grounded recovery if offset drifted or was missing
+          let resolvedPos = -1;
+          if (s.context_before) {
+            const anchor = s.context_before.trim().slice(-25);
+            if (anchor) {
+              const anchorPos = text.indexOf(anchor, lastIdx);
+              if (anchorPos !== -1) {
+                const candidatePos = anchorPos + anchor.length;
+                if (text.startsWith(s.text, candidatePos)) {
+                  resolvedPos = candidatePos;
+                } else {
+                  const windowText = text.slice(candidatePos, candidatePos + 6);
+                  const subIdx = windowText.indexOf(s.text);
+                  if (subIdx !== -1) {
+                    resolvedPos = candidatePos + subIdx;
+                  }
+                }
+              }
+            }
+          }
+          if (resolvedPos === -1) {
+            // Forward search starting strictly after the previous citation
+            resolvedPos = text.indexOf(s.text, lastIdx);
+          }
+
+          if (resolvedPos !== -1 && resolvedPos >= lastIdx) {
+            start = resolvedPos;
+            end = resolvedPos + s.text.length;
+          } else {
+            // Avoid ungrounded substring corruption
+            continue;
+          }
+        }
+
+        // Append text prior to this citation site as plain escaped HTML
+        if (start > lastIdx) {
+          fragments.push(escapeHtml(text.slice(lastIdx, start)));
+        }
+
+        // Append the grounded citation pill
+        const isSup = s.kind === 'sup';
+        const supClass = isSup ? ' cit-sup' : '';
+        const pill = `<span class="cit-pill${supClass}" data-nums="${escapeHtml(s.nums.join(','))}" title="Cited references: ${escapeHtml(s.nums.join(', '))}">${escapeHtml(s.text)}</span>`;
+        fragments.push(pill);
+        lastIdx = end;
+      }
+
+      // Append remaining text after the final citation site
+      if (lastIdx < text.length) {
+        fragments.push(escapeHtml(text.slice(lastIdx)));
+      }
+
+      pDiv.innerHTML = fragments.join('');
     }
 
     manuscriptViewer.appendChild(pDiv);
@@ -657,6 +739,15 @@ function highlightSentenceInManuscript(refNum) {
     setTimeout(() => {
       pEl.style.backgroundColor = 'transparent';
     }, 1800);
+
+    // Also highlight the active citation pill(s) inside that paragraph
+    pEl.querySelectorAll('.cit-pill').forEach(pill => {
+      const nums = (pill.dataset.nums || '').split(',').map(n => parseInt(n, 10));
+      if (nums.includes(refNum)) {
+        pill.classList.add('active');
+        setTimeout(() => pill.classList.remove('active'), 2500);
+      }
+    });
   }
 }
 

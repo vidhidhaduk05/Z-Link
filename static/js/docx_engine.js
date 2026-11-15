@@ -54,6 +54,21 @@ function isLikelyReferenceLine(line) {
   return isAuthenticBibliographicReference(line);
 }
 
+function extractSurroundingSentence(paraText, matchStart, matchEnd) {
+  if (!paraText) return "";
+  const sentences = paraText.split(/(?<=[.!?])\s+/);
+  let curPos = 0;
+  for (const s of sentences) {
+    const sStart = curPos;
+    const sEnd = curPos + s.length;
+    if (sStart <= matchStart && matchStart <= sEnd) {
+      return s.trim();
+    }
+    curPos = sEnd + 1;
+  }
+  return paraText.slice(0, 140).trim();
+}
+
 function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
   let supCount = 0;
   let bracketCount = 0;
@@ -309,14 +324,19 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
 
         if (prevChar && !/\d/.test(prevChar) && !isExpChar && !isExpWord) {
           if (nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
+            const mStart = combinedPrev.length;
+            const mEnd = mStart + rText.length;
+            const sent = extractSurroundingSentence(pText, mStart, mEnd);
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
               kind: "sup",
               text: rText,
               context_before: combinedPrev.slice(-40),
-              sentence: pText.slice(0, 120),
-              nums: Array.from(new Set(nums)).sort((a,b) => a - b)
+              sentence: sent,
+              nums: Array.from(new Set(nums)).sort((a,b) => a - b),
+              match_start: mStart,
+              match_end: mEnd
             });
           }
         }
@@ -352,16 +372,19 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
           });
 
           if (nums.length > 0 && nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
+            const globalStart = combinedPrev.length + bMatch.index;
+            const globalEnd = globalStart + bMatch[0].length;
+            const sent = extractSurroundingSentence(pText, globalStart, globalEnd);
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
               kind: "bracket",
               text: bMatch[0],
-              context_before: pText.slice(Math.max(0, bMatch.index - 40), bMatch.index),
-              sentence: pText.slice(0, 140),
+              context_before: pText.slice(Math.max(0, globalStart - 40), globalStart),
+              sentence: sent,
               nums: Array.from(new Set(nums)).sort((a,b) => a - b),
-              match_start: bMatch.index,
-              match_end: bMatch.index + bMatch[0].length
+              match_start: globalStart,
+              match_end: globalEnd
             });
           }
         }
@@ -418,16 +441,19 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
           }
 
           if (nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
+            const globalStart = combinedPrev.length + match.index;
+            const globalEnd = globalStart + match[0].length;
+            const sent = extractSurroundingSentence(pText, globalStart, globalEnd);
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
               kind: "paren",
               text: match[0],
-              context_before: pText.slice(Math.max(0, match.index - 40), match.index),
-              sentence: pText.slice(0, 140),
+              context_before: pText.slice(Math.max(0, globalStart - 40), globalStart),
+              sentence: sent,
               nums: Array.from(new Set(nums)).sort((a,b) => a - b),
-              match_start: match.index,
-              match_end: match.index + match[0].length
+              match_start: globalStart,
+              match_end: globalEnd
             });
           }
         }
