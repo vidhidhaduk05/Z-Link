@@ -59,6 +59,66 @@ NON_CITATION_INNER_CONTENT = re.compile(
     re.I
 )
 
+# Major Radiology Journals Recognition Dictionary (RSNA, ASNR, ARRS, ESR, SIR, ACR, etc.)
+MAJOR_RADIOLOGY_JOURNAL_MAP = {
+    "radiology": ("Radiology", "Radiology"),
+    "radiographics": ("RadioGraphics", "RadioGraphics"),
+    "american journal of neuroradiology": ("American Journal of Neuroradiology", "AJNR Am J Neuroradiol"),
+    "ajnr am j neuroradiol": ("American Journal of Neuroradiology", "AJNR Am J Neuroradiol"),
+    "am j neuroradiol": ("American Journal of Neuroradiology", "AJNR Am J Neuroradiol"),
+    "ajnr": ("American Journal of Neuroradiology", "AJNR Am J Neuroradiol"),
+    "american journal of roentgenology": ("American Journal of Roentgenology", "AJR Am J Roentgenol"),
+    "ajr am j roentgenol": ("American Journal of Roentgenology", "AJR Am J Roentgenol"),
+    "am j roentgenol": ("American Journal of Roentgenology", "AJR Am J Roentgenol"),
+    "ajr": ("American Journal of Roentgenology", "AJR Am J Roentgenol"),
+    "european radiology": ("European Radiology", "Eur Radiol"),
+    "eur radiol": ("European Radiology", "Eur Radiol"),
+    "journal of vascular and interventional radiology": ("Journal of Vascular and Interventional Radiology", "J Vasc Interv Radiol"),
+    "j vasc interv radiol": ("Journal of Vascular and Interventional Radiology", "J Vasc Interv Radiol"),
+    "jvir": ("Journal of Vascular and Interventional Radiology", "J Vasc Interv Radiol"),
+    "journal of the american college of radiology": ("Journal of the American College of Radiology", "J Am Coll Radiol"),
+    "j am coll radiol": ("Journal of the American College of Radiology", "J Am Coll Radiol"),
+    "jacr": ("Journal of the American College of Radiology", "J Am Coll Radiol"),
+    "investigative radiology": ("Investigative Radiology", "Invest Radiol"),
+    "invest radiol": ("Investigative Radiology", "Invest Radiol"),
+    "academic radiology": ("Academic Radiology", "Acad Radiol"),
+    "acad radiol": ("Academic Radiology", "Acad Radiol"),
+    "clinical radiology": ("Clinical Radiology", "Clin Radiol"),
+    "clin radiol": ("Clinical Radiology", "Clin Radiol"),
+    "korean journal of radiology": ("Korean Journal of Radiology", "Korean J Radiol"),
+    "korean j radiol": ("Korean Journal of Radiology", "Korean J Radiol"),
+    "cardiovascular and interventional radiology": ("CardioVascular and Interventional Radiology", "Cardiovasc Intervent Radiol"),
+    "cardiovasc intervent radiol": ("CardioVascular and Interventional Radiology", "Cardiovasc Intervent Radiol"),
+    "cvir": ("CardioVascular and Interventional Radiology", "Cardiovasc Intervent Radiol"),
+    "neuroradiology": ("Neuroradiology", "Neuroradiology"),
+    "pediatric radiology": ("Pediatric Radiology", "Pediatr Radiol"),
+    "pediatr radiol": ("Pediatric Radiology", "Pediatr Radiol"),
+    "skeletal radiology": ("Skeletal Radiology", "Skeletal Radiol"),
+    "skeletal radiol": ("Skeletal Radiology", "Skeletal Radiol"),
+    "abdominal radiology": ("Abdominal Radiology", "Abdom Radiol"),
+    "abdom radiol": ("Abdominal Radiology", "Abdom Radiol"),
+    "the british journal of radiology": ("The British Journal of Radiology", "Br J Radiol"),
+    "british journal of radiology": ("The British Journal of Radiology", "Br J Radiol"),
+    "br j radiol": ("The British Journal of Radiology", "Br J Radiol"),
+    "bjr": ("The British Journal of Radiology", "Br J Radiol"),
+    "journal of nuclear medicine": ("Journal of Nuclear Medicine", "J Nucl Med"),
+    "j nucl med": ("Journal of Nuclear Medicine", "J Nucl Med"),
+    "jnm": ("Journal of Nuclear Medicine", "J Nucl Med"),
+    "magnetic resonance in medicine": ("Magnetic Resonance in Medicine", "Magn Reson Med"),
+    "magn reson med": ("Magnetic Resonance in Medicine", "Magn Reson Med"),
+    "journal of magnetic resonance imaging": ("Journal of Magnetic Resonance Imaging", "J Magn Reson Imaging"),
+    "j magn reson imaging": ("Journal of Magnetic Resonance Imaging", "J Magn Reson Imaging"),
+    "jmri": ("Journal of Magnetic Resonance Imaging", "J Magn Reson Imaging"),
+    "insights into imaging": ("Insights into Imaging", "Insights Imaging"),
+    "insights imaging": ("Insights into Imaging", "Insights Imaging"),
+    "radiology: artificial intelligence": ("Radiology: Artificial Intelligence", "Radiol Artif Intell"),
+    "radiol artif intell": ("Radiology: Artificial Intelligence", "Radiol Artif Intell"),
+    "radiology: cardiothoracic imaging": ("Radiology: Cardiothoracic Imaging", "Radiol Cardiothorac Imaging"),
+    "radiol cardiothorac imaging": ("Radiology: Cardiothoracic Imaging", "Radiol Cardiothorac Imaging"),
+    "radiology: imaging cancer": ("Radiology: Imaging Cancer", "Radiol Imaging Cancer"),
+    "radiol imaging cancer": ("Radiology: Imaging Cancer", "Radiol Imaging Cancer")
+}
+
 # Clinical statement markers in numbered sentences (e.g. "1. 45 patients were enrolled in 2020")
 CLINICAL_STATEMENT_RE = re.compile(
     r'\b('
@@ -126,6 +186,19 @@ def parse_reference_line(num: int, line: str) -> ReferenceEntry:
         author_str = parts[0]
         authors = [a.strip() for a in re.split(r',| and ', author_str) if a.strip()]
         title = parts[1]
+
+    journal_abbr = ""
+    lower_line = clean_line.lower()
+    for pattern, (j_full, j_abbr) in MAJOR_RADIOLOGY_JOURNAL_MAP.items():
+        if re.search(r'\b' + re.escape(pattern) + r'\b', lower_line):
+            journal = j_full
+            journal_abbr = j_abbr
+            break
+
+    if not journal and len(parts) >= 3:
+        cand = re.split(r'\b(19\d\d|20\d\d)\b|;', parts[2])[0].strip().rstrip('.')
+        if cand and len(cand) > 1 and not cand.isdigit():
+            journal = cand
     
     # Year/Vol/Issue/Pages pattern: 2021;301(2):392-401 or 2020; 35(4): 200-205 or (2020)
     vol_m = re.search(r'\b(19\d\d|20\d\d)\s*;\s*(\d+)(?:\s*\(([^)]+)\))?\s*:\s*([0-9eE\-–]+)', clean_line)
@@ -145,6 +218,7 @@ def parse_reference_line(num: int, line: str) -> ReferenceEntry:
         title=title,
         authors=authors,
         journal=journal,
+        journal_abbr=journal_abbr,
         year=year,
         volume=volume,
         issue=issue,

@@ -14,6 +14,107 @@ from typing import List, Dict, Any, Tuple, Optional
 from server.models import ReferenceEntry
 
 CSL_STYLES = {
+    # --- Major Radiology Journals (RSNA, ASNR, ARRS, ESR, SIR, ACR) ---
+    "radiology": {
+        "id": "http://www.zotero.org/styles/radiology",
+        "name": "Radiology (RSNA)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "ajnr": {
+        "id": "http://www.zotero.org/styles/american-journal-of-neuroradiology",
+        "name": "American Journal of Neuroradiology (AJNR)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "ajr": {
+        "id": "http://www.zotero.org/styles/american-journal-of-roentgenology",
+        "name": "American Journal of Roentgenology (AJR)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "european-radiology": {
+        "id": "http://www.zotero.org/styles/european-radiology",
+        "name": "European Radiology (ESR / Springer)",
+        "category": "numeric",
+        "in_text_kind": "bracket",
+        "sort": "sequential"
+    },
+    "radiographics": {
+        "id": "http://www.zotero.org/styles/radiographics",
+        "name": "RadioGraphics (RSNA)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "jvir": {
+        "id": "http://www.zotero.org/styles/journal-of-vascular-and-interventional-radiology",
+        "name": "Journal of Vascular and Interventional Radiology (JVIR)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "jacr": {
+        "id": "http://www.zotero.org/styles/journal-of-the-american-college-of-radiology",
+        "name": "Journal of the American College of Radiology (JACR)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "investigative-radiology": {
+        "id": "http://www.zotero.org/styles/investigative-radiology",
+        "name": "Investigative Radiology (LWW)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "academic-radiology": {
+        "id": "http://www.zotero.org/styles/academic-radiology",
+        "name": "Academic Radiology (Elsevier)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "clinical-radiology": {
+        "id": "http://www.zotero.org/styles/clinical-radiology",
+        "name": "Clinical Radiology (RCR / Elsevier)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "korean-journal-of-radiology": {
+        "id": "http://www.zotero.org/styles/korean-journal-of-radiology",
+        "name": "Korean Journal of Radiology (KJR)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+    "cvir": {
+        "id": "http://www.zotero.org/styles/cardiovascular-and-interventional-radiology",
+        "name": "CardioVascular and Interventional Radiology (CVIR)",
+        "category": "numeric",
+        "in_text_kind": "bracket",
+        "sort": "sequential"
+    },
+    "pediatric-radiology": {
+        "id": "http://www.zotero.org/styles/pediatric-radiology",
+        "name": "Pediatric Radiology (Springer)",
+        "category": "numeric",
+        "in_text_kind": "bracket",
+        "sort": "sequential"
+    },
+    "journal-of-nuclear-medicine": {
+        "id": "http://www.zotero.org/styles/journal-of-nuclear-medicine",
+        "name": "Journal of Nuclear Medicine (JNM / SNMMI)",
+        "category": "numeric",
+        "in_text_kind": "sup",
+        "sort": "sequential"
+    },
+
+    # --- General Medical & Scientific Numeric Styles ---
     "ama": {
         "id": "http://www.zotero.org/styles/american-medical-association",
         "name": "American Medical Association 11th edition",
@@ -49,6 +150,8 @@ CSL_STYLES = {
         "in_text_kind": "sup",
         "sort": "sequential"
     },
+
+    # --- Author-Date Styles ---
     "apa-7th": {
         "id": "http://www.zotero.org/styles/apa",
         "name": "American Psychological Association 7th edition",
@@ -217,14 +320,14 @@ def format_in_text_for_style(target_style_key: str, nums: List[int], refs_list: 
             "kind": "bracket"
         }
 
-    if target_style_key == "vancouver-bracket":
+    if style.get("in_text_kind") == "bracket" or target_style_key == "vancouver-bracket":
         return {
             "text": f"[{condense_numeric_ranges(nums)}]",
             "is_superscript": False,
             "kind": "bracket"
         }
 
-    if target_style_key == "vancouver-paren":
+    if style.get("in_text_kind") == "paren" or target_style_key == "vancouver-paren":
         return {
             "text": f"({condense_numeric_ranges(nums)})",
             "is_superscript": False,
@@ -389,10 +492,12 @@ def format_bibliography_entry_ieee(num: int, ref: ReferenceEntry) -> str:
 def format_bibliography_for_style(target_style_key: str, num: int, ref: ReferenceEntry) -> str:
     if target_style_key in ("apa-7th", "harvard"):
         return format_bibliography_entry_apa7(ref)
-    if target_style_key in ("vancouver-bracket", "vancouver-paren"):
+    if target_style_key in ("vancouver-bracket", "vancouver-paren", "european-radiology", "cvir", "pediatric-radiology"):
         return format_bibliography_entry_vancouver(num, ref)
     if target_style_key == "ieee":
         return format_bibliography_entry_ieee(num, ref)
+    if target_style_key == "nature":
+        return format_bibliography_entry_nature(num, ref)
     return format_bibliography_entry_ama(num, ref)
 
 def sort_references_for_style(

@@ -256,6 +256,40 @@
     - Switched to Vancouver: pills updated to `[1,2]`, `[3]`, `[2,4]`.
     - Generated in-browser 1.4 MB APA `.docx`: OpenXML verified with `ADDIN ZOTERO_PREF_1` APA style, `ADDIN ZOTERO_BIBL`, and `w:hanging="720"`.
 
+### [2026-11-15 14:38] ARCH-DECISION-020: First-Class Support for Major Radiology Journals (RSNA, ASNR, ARRS, ESR, SIR, ACR)
+- **Context**: User requested: *"can you maek sure we have all the radiology related journals main ones, ajnr, radiology, ajr, etc"*.
+- **Technical Challenge & Domain Scope**:
+  1. Radiology researchers require submission-ready formatting for specialized subspecialty and society journals. While many adhere to AMA/Vancouver numerics, they differ in in-text styling (superscript vs. brackets) and exact Zotero CSL style IDs registered in Word documents (`ADDIN ZOTERO_PREF_1`).
+  2. Manuscripts and bibliography lists often use standard NLM/Index Medicus abbreviations (e.g., `AJNR Am J Neuroradiol`, `AJR Am J Roentgenol`, `Eur Radiol`, `J Vasc Interv Radiol`, `RadioGraphics`) which must be recognized by parsers and engines to correctly populate `journal` and `journal_abbr`.
+- **Decision & Implementation**:
+  1. **Radiology Journals CSL Suite in `static/js/csl_formatter.js` and `server/csl_formatter.py`**:
+     - Integrated all 14 premier radiology journals into `CSL_STYLES`:
+       - `radiology`: *Radiology* (RSNA, `http://www.zotero.org/styles/radiology`, Superscript)
+       - `ajnr`: *American Journal of Neuroradiology* (ASNR, `http://www.zotero.org/styles/american-journal-of-neuroradiology`, Superscript)
+       - `ajr`: *American Journal of Roentgenology* (ARRS, `http://www.zotero.org/styles/american-journal-of-roentgenology`, Superscript)
+       - `european-radiology`: *European Radiology* (ESR / Springer, `http://www.zotero.org/styles/european-radiology`, Brackets `[1, 2]`)
+       - `radiographics`: *RadioGraphics* (RSNA, `http://www.zotero.org/styles/radiographics`, Superscript)
+       - `jvir`: *Journal of Vascular and Interventional Radiology* (SIR / Elsevier, `http://www.zotero.org/styles/journal-of-vascular-and-interventional-radiology`, Superscript)
+       - `jacr`: *Journal of the American College of Radiology* (ACR / Elsevier, `http://www.zotero.org/styles/journal-of-the-american-college-of-radiology`, Superscript)
+       - `investigative-radiology`: *Investigative Radiology* (LWW, `http://www.zotero.org/styles/investigative-radiology`, Superscript)
+       - `academic-radiology`: *Academic Radiology* (AUR / Elsevier, `http://www.zotero.org/styles/academic-radiology`, Superscript)
+       - `clinical-radiology`: *Clinical Radiology* (RCR / Elsevier, `http://www.zotero.org/styles/clinical-radiology`, Superscript)
+       - `korean-journal-of-radiology`: *Korean Journal of Radiology* (KSR, `http://www.zotero.org/styles/korean-journal-of-radiology`, Superscript)
+       - `cvir`: *CardioVascular and Interventional Radiology* (CIRSE / Springer, `http://www.zotero.org/styles/cardiovascular-and-interventional-radiology`, Brackets `[1, 2]`)
+       - `pediatric-radiology`: *Pediatric Radiology* (SPR / Springer, `http://www.zotero.org/styles/pediatric-radiology`, Brackets `[1, 2]`)
+       - `journal-of-nuclear-medicine`: *Journal of Nuclear Medicine* (SNMMI, `http://www.zotero.org/styles/journal-of-nuclear-medicine`, Superscript)
+  2. **Radiology Journal Recognition Dictionaries in `server/parser.py` and `static/js/docx_engine.js`**:
+     - Built `MAJOR_RADIOLOGY_JOURNAL_MAP` matching 40+ variations of radiology journal names, acronyms, and NLM abbreviations.
+     - Automatically populates `ref.journal` and `ref.journal_abbr` upon ingestion.
+  3. **UI Integration in `index.html`**:
+     - Positioned dedicated `"Radiology Journals (RSNA, ASNR, ARRS, ESR, SIR, ACR)"` as the primary optgroup in `#targetStyleSelect`.
+- **Verification**:
+  - Python Unit Tests: Added `test_45_radiology_journals_csl_and_extraction` to `tests/test_engine.py` (45/45 tests pass).
+  - Headless Chrome CDP Live Test: Verified in `scripts/verify_csl_switching_live.py`:
+    - Switched live to `radiology`, `ajnr`, `ajr`, and `european-radiology`.
+    - Generated 1.4 MB Word document in `ajnr` mode with authentic `american-journal-of-neuroradiology` OpenXML field codes.
+
+
 
 
 

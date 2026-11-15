@@ -10,6 +10,107 @@
  */
 
 export const CSL_STYLES = {
+  // --- Major Radiology Journals (RSNA, ASNR, ARRS, ESR, SIR, ACR) ---
+  "radiology": {
+    id: "http://www.zotero.org/styles/radiology",
+    name: "Radiology (RSNA)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "ajnr": {
+    id: "http://www.zotero.org/styles/american-journal-of-neuroradiology",
+    name: "American Journal of Neuroradiology (AJNR)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "ajr": {
+    id: "http://www.zotero.org/styles/american-journal-of-roentgenology",
+    name: "American Journal of Roentgenology (AJR)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "european-radiology": {
+    id: "http://www.zotero.org/styles/european-radiology",
+    name: "European Radiology (ESR / Springer)",
+    category: "numeric",
+    inTextKind: "bracket",
+    sort: "sequential"
+  },
+  "radiographics": {
+    id: "http://www.zotero.org/styles/radiographics",
+    name: "RadioGraphics (RSNA)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "jvir": {
+    id: "http://www.zotero.org/styles/journal-of-vascular-and-interventional-radiology",
+    name: "Journal of Vascular and Interventional Radiology (JVIR)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "jacr": {
+    id: "http://www.zotero.org/styles/journal-of-the-american-college-of-radiology",
+    name: "Journal of the American College of Radiology (JACR)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "investigative-radiology": {
+    id: "http://www.zotero.org/styles/investigative-radiology",
+    name: "Investigative Radiology (LWW)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "academic-radiology": {
+    id: "http://www.zotero.org/styles/academic-radiology",
+    name: "Academic Radiology (Elsevier)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "clinical-radiology": {
+    id: "http://www.zotero.org/styles/clinical-radiology",
+    name: "Clinical Radiology (RCR / Elsevier)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "korean-journal-of-radiology": {
+    id: "http://www.zotero.org/styles/korean-journal-of-radiology",
+    name: "Korean Journal of Radiology (KJR)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+  "cvir": {
+    id: "http://www.zotero.org/styles/cardiovascular-and-interventional-radiology",
+    name: "CardioVascular and Interventional Radiology (CVIR)",
+    category: "numeric",
+    inTextKind: "bracket",
+    sort: "sequential"
+  },
+  "pediatric-radiology": {
+    id: "http://www.zotero.org/styles/pediatric-radiology",
+    name: "Pediatric Radiology (Springer)",
+    category: "numeric",
+    inTextKind: "bracket",
+    sort: "sequential"
+  },
+  "journal-of-nuclear-medicine": {
+    id: "http://www.zotero.org/styles/journal-of-nuclear-medicine",
+    name: "Journal of Nuclear Medicine (JNM / SNMMI)",
+    category: "numeric",
+    inTextKind: "sup",
+    sort: "sequential"
+  },
+
+  // --- General Medical & Scientific Numeric Styles ---
   "ama": {
     id: "http://www.zotero.org/styles/american-medical-association",
     name: "American Medical Association 11th edition",
@@ -45,6 +146,8 @@ export const CSL_STYLES = {
     inTextKind: "sup",
     sort: "sequential"
   },
+
+  // --- Author-Date Styles ---
   "apa-7th": {
     id: "http://www.zotero.org/styles/apa",
     name: "American Psychological Association 7th edition",
@@ -216,7 +319,7 @@ export function formatInTextForStyle(targetStyleKey, nums, refsList) {
     };
   }
 
-  if (targetStyleKey === "vancouver-bracket") {
+  if (style.inTextKind === "bracket" || targetStyleKey === "vancouver-bracket") {
     const inner = condenseNumericRanges(nums);
     return {
       text: `[${inner}]`,
@@ -225,7 +328,7 @@ export function formatInTextForStyle(targetStyleKey, nums, refsList) {
     };
   }
 
-  if (targetStyleKey === "vancouver-paren") {
+  if (style.inTextKind === "paren" || targetStyleKey === "vancouver-paren") {
     const inner = condenseNumericRanges(nums);
     return {
       text: `(${inner})`,
@@ -463,11 +566,25 @@ export function formatBibliographyForStyle(targetStyleKey, num, ref) {
       return formatBibliographyEntryApa7(ref);
     case "vancouver-bracket":
     case "vancouver-paren":
+    case "european-radiology":
+    case "cvir":
+    case "pediatric-radiology":
       return formatBibliographyEntryVancouver(num, ref);
     case "ieee":
       return formatBibliographyEntryIeee(num, ref);
     case "nature":
       return formatBibliographyEntryNature(num, ref);
+    case "radiology":
+    case "ajnr":
+    case "ajr":
+    case "radiographics":
+    case "jvir":
+    case "jacr":
+    case "investigative-radiology":
+    case "academic-radiology":
+    case "clinical-radiology":
+    case "korean-journal-of-radiology":
+    case "journal-of-nuclear-medicine":
     case "ama":
     default:
       return formatBibliographyEntryAma(num, ref);

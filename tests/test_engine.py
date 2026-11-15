@@ -1468,6 +1468,104 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIn("<w:ins", apa_tc_xml, "APA Tracked changes mode must emit <w:ins>")
         self.assertIn("apa", apa_tc_xml, "Must retain APA target style in tracked changes")
 
+    def test_45_radiology_journals_csl_and_extraction(self):
+        """
+        Verify full support for all major radiology journals (RSNA, ASNR, ARRS, ESR, SIR, ACR):
+        1. All 14 radiology styles registered with official Zotero repository IDs
+        2. In-text citation formatting: Superscript for RSNA/ASNR/ARRS/SIR, Brackets for ESR/Springer
+        3. Word OpenXML linking with target style IDs (radiology, ajnr, ajr, european-radiology)
+        4. Journal detection from raw bibliographic citations
+        """
+        from server.csl_formatter import (
+            CSL_STYLES,
+            format_in_text_for_style,
+            format_bibliography_for_style
+        )
+        from server.parser import parse_reference_line
+
+        # 1. Verify Registration of all Major Radiology Journals
+        rad_styles = [
+            ("radiology", "http://www.zotero.org/styles/radiology", "sup"),
+            ("ajnr", "http://www.zotero.org/styles/american-journal-of-neuroradiology", "sup"),
+            ("ajr", "http://www.zotero.org/styles/american-journal-of-roentgenology", "sup"),
+            ("european-radiology", "http://www.zotero.org/styles/european-radiology", "bracket"),
+            ("radiographics", "http://www.zotero.org/styles/radiographics", "sup"),
+            ("jvir", "http://www.zotero.org/styles/journal-of-vascular-and-interventional-radiology", "sup"),
+            ("jacr", "http://www.zotero.org/styles/journal-of-the-american-college-of-radiology", "sup"),
+            ("investigative-radiology", "http://www.zotero.org/styles/investigative-radiology", "sup"),
+            ("academic-radiology", "http://www.zotero.org/styles/academic-radiology", "sup"),
+            ("clinical-radiology", "http://www.zotero.org/styles/clinical-radiology", "sup"),
+            ("korean-journal-of-radiology", "http://www.zotero.org/styles/korean-journal-of-radiology", "sup"),
+            ("cvir", "http://www.zotero.org/styles/cardiovascular-and-interventional-radiology", "bracket"),
+            ("pediatric-radiology", "http://www.zotero.org/styles/pediatric-radiology", "bracket"),
+            ("journal-of-nuclear-medicine", "http://www.zotero.org/styles/journal-of-nuclear-medicine", "sup"),
+        ]
+
+        ref_mock = ReferenceEntry(
+            ref_num=1,
+            raw_text="Smith J, Doe A. Deep learning in neuroradiology. AJNR Am J Neuroradiol. 2021;42(3):400-408.",
+            title="Deep learning in neuroradiology",
+            authors=["Smith J", "Doe A"],
+            journal="American Journal of Neuroradiology",
+            year="2021",
+            doi="10.3174/ajnr.A7000"
+        )
+
+        for key, expected_id, expected_kind in rad_styles:
+            self.assertIn(key, CSL_STYLES, f"Style '{key}' must be present in CSL_STYLES")
+            self.assertEqual(CSL_STYLES[key]["id"], expected_id, f"Style '{key}' ID mismatch")
+            
+            in_text = format_in_text_for_style(key, [1, 2], [ref_mock])
+            if expected_kind == "sup":
+                self.assertTrue(in_text["is_superscript"], f"{key} must use superscript in-text citations")
+                self.assertEqual(in_text["text"], "1,2")
+            else:
+                self.assertFalse(in_text["is_superscript"], f"{key} must not use superscript")
+                self.assertEqual(in_text["text"], "[1,2]")
+
+        # 2. Test Word Document generation for key radiology journals
+        paras, sites, references = parse_docx_manuscript(self.docx_file)
+
+        # Radiology (RSNA)
+        out_radiol = BytesIO()
+        link_docx_manuscript(self.docx_file, sites, references, output_target=out_radiol, target_style="radiology")
+        doc_radiol_xml = docx.Document(BytesIO(out_radiol.getvalue()))._part._element.xml
+        self.assertIn("http://www.zotero.org/styles/radiology", doc_radiol_xml)
+        self.assertIn("ADDIN ZOTERO_BIBL", doc_radiol_xml)
+
+        # AJNR (American Journal of Neuroradiology)
+        out_ajnr = BytesIO()
+        link_docx_manuscript(self.docx_file, sites, references, output_target=out_ajnr, target_style="ajnr")
+        doc_ajnr_xml = docx.Document(BytesIO(out_ajnr.getvalue()))._part._element.xml
+        self.assertIn("american-journal-of-neuroradiology", doc_ajnr_xml)
+
+        # AJR (American Journal of Roentgenology)
+        out_ajr = BytesIO()
+        link_docx_manuscript(self.docx_file, sites, references, output_target=out_ajr, target_style="ajr")
+        doc_ajr_xml = docx.Document(BytesIO(out_ajr.getvalue()))._part._element.xml
+        self.assertIn("american-journal-of-roentgenology", doc_ajr_xml)
+
+        # European Radiology (ESR / Springer)
+        out_eur = BytesIO()
+        link_docx_manuscript(self.docx_file, sites, references, output_target=out_eur, target_style="european-radiology")
+        doc_eur_xml = docx.Document(BytesIO(out_eur.getvalue()))._part._element.xml
+        self.assertIn("european-radiology", doc_eur_xml)
+        self.assertIn("[1]", doc_eur_xml, "European Radiology must format citations with brackets [1]")
+
+        # 3. Test Radiology Journal Extraction
+        parsed_ajnr = parse_reference_line(1, "1. Fox C, Stout C. Moyamoya imaging. AJNR Am J Neuroradiol. 2018;39(4):720-726. doi: 10.3174/ajnr.A5500")
+        self.assertEqual(parsed_ajnr.journal, "American Journal of Neuroradiology")
+        self.assertEqual(parsed_ajnr.journal_abbr, "AJNR Am J Neuroradiol")
+
+        parsed_radiol = parse_reference_line(2, "2. McKinney AM, Palmer CS. Posterior reversible encephalopathy syndrome. Radiology. 2007;244(1):249-257. doi: 10.1148/radiol.2441061099")
+        self.assertEqual(parsed_radiol.journal, "Radiology")
+
+        parsed_ajr = parse_reference_line(3, "3. Provenzale JM, Jahan R. Diffusion-weighted imaging in Moyamoya. AJR Am J Roentgenol. 2004;182(2):355-361.")
+        self.assertEqual(parsed_ajr.journal, "American Journal of Roentgenology")
+
+        parsed_eur = parse_reference_line(4, "4. Saliou G, Krings T. Pediatric vascular malformations. Eur Radiol. 2014;24(12):3120-3129.")
+        self.assertEqual(parsed_eur.journal, "European Radiology")
+
 if __name__ == "__main__":
     unittest.main()
 

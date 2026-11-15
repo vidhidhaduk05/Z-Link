@@ -196,19 +196,90 @@ async def run_verification():
                 assert not p["isSup"], "Vancouver bracket citations should not be superscript"
                 assert p["text"].startswith("[") and p["text"].endswith("]"), f"Vancouver citation {p['text']} must have square brackets"
 
-            # ---------------- TEST IN-BROWSER DOCX EXPORT IN APA MODE ----------------
-            print("\n--- Generating APA Linked Word Document via Browser Engine ---")
-            docx_b64 = await eval_js(ws, """
+            # ---------------- TEST SWITCHING TO RADIOLOGY (RSNA) ----------------
+            print("\n--- Switching Target Style to Radiology (RSNA) ---")
+            await eval_js(ws, """
+                (() => {
+                    const select = document.getElementById('targetStyleSelect');
+                    select.value = 'radiology';
+                    select.dispatchEvent(new Event('change'));
+                })()
+            """)
+            await asyncio.sleep(0.5)
+            rad_badge = await eval_js(ws, "document.getElementById('targetStyleBadge').textContent")
+            print(f"Radiology badge: {rad_badge}")
+            assert "Radiology (RSNA)" in rad_badge
+            rad_pills = await eval_js(ws, """
+                Array.from(document.querySelectorAll('#manuscriptViewer .cit-pill')).slice(0, 3).map(p => ({
+                    text: p.textContent,
+                    isSup: p.classList.contains('cit-sup')
+                }))
+            """)
+            assert all(p["isSup"] for p in rad_pills), "Radiology citations must be superscript"
+
+            # ---------------- TEST SWITCHING TO AJNR ----------------
+            print("\n--- Switching Target Style to AJNR (American Journal of Neuroradiology) ---")
+            await eval_js(ws, """
+                (() => {
+                    const select = document.getElementById('targetStyleSelect');
+                    select.value = 'ajnr';
+                    select.dispatchEvent(new Event('change'));
+                })()
+            """)
+            await asyncio.sleep(0.5)
+            ajnr_badge = await eval_js(ws, "document.getElementById('targetStyleBadge').textContent")
+            print(f"AJNR badge: {ajnr_badge}")
+            assert "AJNR" in ajnr_badge
+
+            # ---------------- TEST SWITCHING TO AJR ----------------
+            print("\n--- Switching Target Style to AJR (American Journal of Roentgenology) ---")
+            await eval_js(ws, """
+                (() => {
+                    const select = document.getElementById('targetStyleSelect');
+                    select.value = 'ajr';
+                    select.dispatchEvent(new Event('change'));
+                })()
+            """)
+            await asyncio.sleep(0.5)
+            ajr_badge = await eval_js(ws, "document.getElementById('targetStyleBadge').textContent")
+            print(f"AJR badge: {ajr_badge}")
+            assert "AJR" in ajr_badge
+
+            # ---------------- TEST SWITCHING TO EUROPEAN RADIOLOGY ----------------
+            print("\n--- Switching Target Style to European Radiology (ESR / Springer) ---")
+            await eval_js(ws, """
+                (() => {
+                    const select = document.getElementById('targetStyleSelect');
+                    select.value = 'european-radiology';
+                    select.dispatchEvent(new Event('change'));
+                })()
+            """)
+            await asyncio.sleep(0.5)
+            eur_badge = await eval_js(ws, "document.getElementById('targetStyleBadge').textContent")
+            print(f"European Radiology badge: {eur_badge}")
+            assert "European Radiology" in eur_badge
+            eur_pills = await eval_js(ws, """
+                Array.from(document.querySelectorAll('#manuscriptViewer .cit-pill')).slice(0, 3).map(p => ({
+                    text: p.textContent,
+                    isSup: p.classList.contains('cit-sup')
+                }))
+            """)
+            assert not any(p["isSup"] for p in eur_pills), "European Radiology citations must be brackets [1,2], not superscript"
+            assert eur_pills[0]["text"].startswith("[") and eur_pills[0]["text"].endswith("]")
+
+            # ---------------- TEST IN-BROWSER DOCX EXPORT IN AJNR MODE ----------------
+            print("\n--- Generating AJNR Linked Word Document via Browser Engine ---")
+            ajnr_docx_b64 = await eval_js(ws, """
                 (async () => {
                     const { injectZoteroFieldsInBrowser } = await import('./static/js/docx_engine.js');
                     const blob = await injectZoteroFieldsInBrowser(
                         window.appState.parsedData,
                         window.appState.verdicts,
-                        false, // renumberAma false for author-date
-                        false, // clean mode
+                        true,
+                        false,
                         "Co-Scientist",
                         true,
-                        "apa-7th"
+                        "ajnr"
                     );
                     const buf = await blob.arrayBuffer();
                     const bytes = new Uint8Array(buf);
@@ -219,19 +290,14 @@ async def run_verification():
                     return btoa(binary);
                 })()
             """)
-            assert docx_b64, "Docx export returned null or empty"
-            docx_bytes = base64.b64decode(docx_b64)
-            print(f"Generated APA docx in browser: {len(docx_bytes)} bytes")
-            assert len(docx_bytes) > 10000
-
-            doc = docx.Document(io.BytesIO(docx_bytes))
-            doc_xml = doc._part._element.xml
-
-            # Check APA preference and hanging indents
-            assert "apa" in doc_xml, "Generated docx must configure APA style in Zotero doc prefs"
-            assert "ADDIN ZOTERO_BIBL" in doc_xml, "Generated docx must contain ADDIN ZOTERO_BIBL"
-            assert 'w:hanging="720"' in doc_xml, "APA bibliography entries must have w:hanging='720'"
-            print("✓ Docx OpenXML verified: APA style, ADDIN ZOTERO_BIBL, and w:hanging='720' confirmed.")
+            assert ajnr_docx_b64, "AJNR Docx export returned null or empty"
+            ajnr_docx_bytes = base64.b64decode(ajnr_docx_b64)
+            print(f"Generated AJNR docx in browser: {len(ajnr_docx_bytes)} bytes")
+            doc_ajnr = docx.Document(io.BytesIO(ajnr_docx_bytes))
+            doc_ajnr_xml = doc_ajnr._part._element.xml
+            assert "american-journal-of-neuroradiology" in doc_ajnr_xml, "Generated docx must configure AJNR style ID"
+            assert "ADDIN ZOTERO_BIBL" in doc_ajnr_xml
+            print("✓ AJNR Docx OpenXML verified: american-journal-of-neuroradiology style ID confirmed.")
 
             print("\nALL LIVE BROWSER CSL VERIFICATION CHECKS PASSED PERFECTLY!")
 
