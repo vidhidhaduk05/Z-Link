@@ -643,122 +643,212 @@ export async function injectZoteroFieldsInBrowser(
     }
   }
 
-  // Bibliography wrapper & reordering
-  const refStartRe = /^(\d{1,3})\.\s*(.*)$/;
-  const refParasInfo = [];
-  paragraphs.forEach(p => {
+  // Boundary Isolation & Atomic Reference Blocks
+  const REF_HEADER_RE = /^\s*(?:REFERENCES|Reference List|Bibliography|Works Cited)\s*$/i;
+  const POST_REF_HEADER_RE = /^\s*(?:Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)/i;
+  const REF_START_RE = /^(\d{1,3})\.\s*(.*)$/;
+
+  let headerIdx = -1;
+  let startIdx = -1;
+  let endIdx = -1;
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    const t = Array.from(paragraphs[i].getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+    if (REF_HEADER_RE.test(t)) {
+      headerIdx = i;
+      startIdx = i + 1;
+      break;
+    }
+  }
+
+  if (startIdx === -1) {
+    for (let i = 0; i < paragraphs.length; i++) {
+      const t = Array.from(paragraphs[i].getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+      const m = t.match(REF_START_RE);
+      if (m && parseInt(m[1], 10) === 1) {
+        startIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (startIdx === -1) {
+    startIdx = 0;
+    endIdx = paragraphs.length;
+  } else {
+    for (let i = startIdx; i < paragraphs.length; i++) {
+      const t = Array.from(paragraphs[i].getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
+      if (POST_REF_HEADER_RE.test(t)) {
+        endIdx = i;
+        break;
+      }
+    }
+    if (endIdx === -1) endIdx = paragraphs.length;
+  }
+
+  // Extract atomic reference blocks within [startIdx, endIdx)
+  const blocks = [];
+  let currentBlock = null;
+
+  for (let i = startIdx; i < endIdx; i++) {
+    const p = paragraphs[i];
     const t = Array.from(p.getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("").trim();
-    const m = t.match(refStartRe);
+    if (!t) continue;
+    const m = t.match(REF_START_RE);
     if (m) {
       const oldN = parseInt(m[1], 10);
       const newN = mapping[oldN] || oldN;
-      refParasInfo.push({ oldN, newN, p, rest: m[2], m });
+      currentBlock = {
+        oldN,
+        newN,
+        primaryP: p,
+        paragraphs: [p],
+        rest: m[2],
+        m
+      };
+      blocks.push(currentBlock);
+    } else if (currentBlock) {
+      currentBlock.paragraphs.push(p);
     }
-  });
+  }
 
-  if (refParasInfo.length > 0) {
-    // Re-number leading digit of each bibliography paragraph
-    refParasInfo.forEach(item => {
-      const oldPrefix = item.oldN + ".";
-      const newPrefix = item.newN + ".";
-      const tNodes = Array.from(item.p.getElementsByTagNameNS(W_NS, "t"));
+  if (blocks.length > 0) {
+    // Re-number leading digit of each bibliography block
+    blocks.forEach(block => {
+      const oldPrefix = block.oldN + ".";
+      const newPrefix = block.newN + ".";
+      const p = block.primaryP;
+      const tNodes = Array.from(p.getElementsByTagNameNS(W_NS, "t"));
 
-      const v = verdicts[item.oldN] || {};
+      const v = verdicts[block.oldN] || {};
       let recoveredDoi = null;
       if (v.doi && v.doi.trim()) {
         const cleanDoi = v.doi.trim();
-        const pFullText = tNodes.map(x => x.textContent).join("");
-        if (!pFullText.includes(cleanDoi)) {
+        const blockFullText = block.paragraphs.map(bp => 
+          Array.from(bp.getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("")
+        ).join(" ");
+        if (!blockFullText.includes(cleanDoi)) {
           recoveredDoi = cleanDoi.startsWith("http") ? cleanDoi : `https://doi.org/${cleanDoi}`;
         }
       }
 
-      if (trackChanges && item.oldN !== item.newN) {
+      if (trackChanges && block.oldN !== block.newN) {
         let replaced = false;
+        // Locate leading run beginning with oldPrefix
         for (const t of tNodes) {
-          if (t.textContent.includes(oldPrefix)) {
-            const parts = t.textContent.split(oldPrefix);
-            t.textContent = parts[0];
+          const tText = t.textContent;
+          const trimmed = tText.trimStart();
+          if (trimmed.startsWith(oldPrefix)) {
+            const indent = tText.substring(0, tText.length - trimmed.length);
+            const afterPrefix = trimmed.substring(oldPrefix.length);
+            t.textContent = indent;
             const delEl = createDelRun(xmlDoc, oldPrefix, revCounter++, author, dateStr);
             const insEl = createInsRun(xmlDoc, newPrefix, revCounter++, author, dateStr);
             const runParent = t.parentNode;
-            item.p.insertBefore(delEl, runParent.nextSibling);
-            item.p.insertBefore(insEl, delEl.nextSibling);
-            if (parts[1]) {
+            p.insertBefore(delEl, runParent.nextSibling);
+            p.insertBefore(insEl, delEl.nextSibling);
+            if (afterPrefix) {
               const afterRun = xmlDoc.createElementNS(W_NS, "w:r");
               const afterT = xmlDoc.createElementNS(W_NS, "w:t");
               afterT.setAttribute("xml:space", "preserve");
-              afterT.textContent = parts[1];
+              afterT.textContent = afterPrefix;
               afterRun.appendChild(afterT);
-              item.p.insertBefore(afterRun, insEl.nextSibling);
+              p.insertBefore(afterRun, insEl.nextSibling);
             }
             replaced = true;
             break;
           }
         }
         if (!replaced && tNodes.length > 0) {
-          const delEl = createDelRun(xmlDoc, `${item.oldN}. `, revCounter++, author, dateStr);
-          const insEl = createInsRun(xmlDoc, `${item.newN}. `, revCounter++, author, dateStr);
-          item.p.insertBefore(insEl, item.p.firstChild);
-          item.p.insertBefore(delEl, item.p.firstChild);
-          tNodes[0].textContent = item.rest;
+          const delEl = createDelRun(xmlDoc, `${block.oldN}. `, revCounter++, author, dateStr);
+          const insEl = createInsRun(xmlDoc, `${block.newN}. `, revCounter++, author, dateStr);
+          // Strict schema compliance: insert AFTER w:pPr if present
+          const pPr = p.getElementsByTagNameNS(W_NS, "pPr")[0];
+          if (pPr && pPr.nextSibling) {
+            p.insertBefore(delEl, pPr.nextSibling);
+            p.insertBefore(insEl, delEl.nextSibling);
+          } else if (pPr) {
+            p.appendChild(delEl);
+            p.appendChild(insEl);
+          } else {
+            p.insertBefore(delEl, p.firstChild);
+            p.insertBefore(insEl, delEl.nextSibling);
+          }
+          tNodes[0].textContent = block.rest;
         }
-      } else {
+      } else if (block.oldN !== block.newN) {
         let replaced = false;
         for (const t of tNodes) {
-          if (t.textContent.includes(oldPrefix)) {
-            t.textContent = t.textContent.replace(oldPrefix, newPrefix);
+          const tText = t.textContent;
+          const trimmed = tText.trimStart();
+          if (trimmed.startsWith(oldPrefix)) {
+            const indent = tText.substring(0, tText.length - trimmed.length);
+            const afterPrefix = trimmed.substring(oldPrefix.length);
+            t.textContent = indent + newPrefix + afterPrefix;
             replaced = true;
             break;
           }
         }
         if (!replaced && tNodes.length > 0) {
-          tNodes[0].textContent = `${item.newN}. ${item.rest}`;
+          tNodes[0].textContent = `${block.newN}. ${block.rest}`;
         }
       }
 
       if (recoveredDoi) {
+        const lastP = block.paragraphs[block.paragraphs.length - 1];
         if (trackChanges) {
           const insDoi = createInsRun(xmlDoc, ` ${recoveredDoi}`, revCounter++, author, dateStr);
-          item.p.appendChild(insDoi);
+          lastP.appendChild(insDoi);
         } else {
           const rDoi = xmlDoc.createElementNS(W_NS, "w:r");
           const tDoi = xmlDoc.createElementNS(W_NS, "w:t");
           tDoi.setAttribute("xml:space", "preserve");
           tDoi.textContent = ` ${recoveredDoi}`;
           rDoi.appendChild(tDoi);
-          item.p.appendChild(rDoi);
+          lastP.appendChild(rDoi);
         }
       }
     });
 
-    let firstP = refParasInfo[0].p;
-    let lastP = refParasInfo[refParasInfo.length - 1].p;
+    // Reorder atomic reference blocks in the document DOM
+    if (renumberAma && blocks.length > 1) {
+      const sortedBlocks = [...blocks].sort((a, b) => a.newN - b.newN);
+      let anchorNode = null;
+      let parentNode = null;
 
-    // Reorder paragraph DOM elements according to newN
-    if (renumberAma && refParasInfo.length > 1) {
-      const parent = firstP.parentNode;
-      if (parent) {
-        const sortedPInfo = [...refParasInfo].sort((a, b) => a.newN - b.newN);
-        const anchorNode = lastP.nextSibling;
-        sortedPInfo.forEach(item => {
-          parent.insertBefore(item.p, anchorNode);
+      if (headerIdx >= 0 && headerIdx < paragraphs.length) {
+        parentNode = paragraphs[headerIdx].parentNode;
+        anchorNode = paragraphs[headerIdx].nextSibling;
+      } else {
+        parentNode = blocks[0].primaryP.parentNode;
+        anchorNode = blocks[0].primaryP;
+      }
+
+      if (parentNode) {
+        sortedBlocks.forEach(b => {
+          b.paragraphs.forEach(bp => {
+            parentNode.insertBefore(bp, anchorNode);
+          });
         });
-        firstP = sortedPInfo[0].p;
-        lastP = sortedPInfo[sortedPInfo.length - 1].p;
       }
     }
 
-    const bibInstr = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY';
-    const bBegin = createFieldRun(xmlDoc, "begin");
-    const bInstr = createFieldRun(xmlDoc, "instr", bibInstr);
-    const bSep = createFieldRun(xmlDoc, "separate");
-    const bEnd = createFieldRun(xmlDoc, "end");
+    // In clean mode only: inject self-contained ADDIN ZOTERO_BIBL field marker on REFERENCES header
+    if (!trackChanges) {
+      const bibHeaderP = (headerIdx >= 0 && headerIdx < paragraphs.length) ? paragraphs[headerIdx] : blocks[0].primaryP;
+      if (bibHeaderP) {
+        const bibInstr = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY';
+        const bBegin = createFieldRun(xmlDoc, "begin");
+        const bInstr = createFieldRun(xmlDoc, "instr", bibInstr);
+        const bSep = createFieldRun(xmlDoc, "separate");
+        const bEnd = createFieldRun(xmlDoc, "end");
 
-    firstP.insertBefore(bSep, firstP.firstChild);
-    firstP.insertBefore(bInstr, firstP.firstChild);
-    firstP.insertBefore(bBegin, firstP.firstChild);
-    lastP.appendChild(bEnd);
+        bibHeaderP.appendChild(bBegin);
+        bibHeaderP.appendChild(bInstr);
+        bibHeaderP.appendChild(bSep);
+        bibHeaderP.appendChild(bEnd);
+      }
+    }
   }
 
   // Document Preferences (AMA 11th edition)

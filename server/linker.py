@@ -241,18 +241,103 @@ def inject_citation_field(sup_run_element, citation_json: Dict):
     sup_run_element.addprevious(fld_run('separate'))
     sup_run_element.addnext(fld_run('end'))
 
-def inject_bibliography_field(doc, first_para, last_para):
+REF_HEADER_RE = re.compile(r'^\s*(?:REFERENCES|Reference List|Bibliography|Works Cited)\s*$', re.I)
+POST_REF_HEADER_RE = re.compile(
+    r'^\s*(?:Supplementary\s+|Supplemental\s+|Appendix\b|Appendices\b|Tables?\b|Figure\s+Legends?|Figures?\b|Author\s+Contributions|Funding\b|Conflict(?:s)?\s+of\s+Interest|IRB\s+Statement|Informed\s+Consent)',
+    re.I
+)
+REF_START_RE = re.compile(r'^(\d{1,3})\.\s*(.*)$')
+
+class AtomicReferenceBlock:
+    def __init__(self, old_n: int, new_n: int, primary_para, match_obj):
+        self.old_n = old_n
+        self.new_n = new_n
+        self.primary_para = primary_para
+        self.match_obj = match_obj
+        self.paragraphs = [primary_para]
+
+def find_reference_section_bounds(doc) -> Tuple[Optional[int], int, int]:
+    """
+    Locates the reference section in doc.paragraphs.
+    Returns (header_idx, start_idx, end_idx) where:
+    - header_idx: index of the 'REFERENCES' paragraph (or None if not found)
+    - start_idx: index of the first reference paragraph
+    - end_idx: index after the last reference paragraph (exclusive boundary)
+    """
+    header_idx = None
+    start_idx = None
+    end_idx = None
+
+    for i, p in enumerate(doc.paragraphs):
+        txt = p.text.strip()
+        if REF_HEADER_RE.match(txt):
+            header_idx = i
+            start_idx = i + 1
+            break
+
+    if start_idx is None:
+        for i, p in enumerate(doc.paragraphs):
+            txt = p.text.strip()
+            m = REF_START_RE.match(txt)
+            if m and int(m.group(1)) == 1:
+                start_idx = i
+                break
+
+    if start_idx is None:
+        return None, 0, len(doc.paragraphs)
+
+    for i in range(start_idx, len(doc.paragraphs)):
+        txt = doc.paragraphs[i].text.strip()
+        if POST_REF_HEADER_RE.match(txt):
+            end_idx = i
+            break
+
+    if end_idx is None:
+        end_idx = len(doc.paragraphs)
+
+    return header_idx, start_idx, end_idx
+
+def extract_atomic_reference_blocks(
+    paragraphs: List,
+    mapping: Dict[int, int]
+) -> List[AtomicReferenceBlock]:
+    """
+    Extracts atomic reference blocks from candidate reference paragraphs.
+    Continuation paragraphs (e.g. wrapped DOIs, URLs, multi-line entries)
+    are bound to their parent reference entry so they reorder together.
+    """
+    blocks: List[AtomicReferenceBlock] = []
+    current_block: Optional[AtomicReferenceBlock] = None
+
+    for p in paragraphs:
+        txt = p.text.strip()
+        if not txt:
+            continue
+        m = REF_START_RE.match(txt)
+        if m:
+            old_n = int(m.group(1))
+            new_n = mapping.get(old_n, old_n)
+            current_block = AtomicReferenceBlock(old_n, new_n, p, m)
+            blocks.append(current_block)
+        elif current_block is not None:
+            current_block.paragraphs.append(p)
+
+    return blocks
+
+def inject_bibliography_field(doc, target_para=None, *args, **kwargs):
+    """
+    Injects a self-contained ADDIN ZOTERO_BIBL field marker.
+    Attaches cleanly to target_para (e.g. REFERENCES header) without wrapping
+    or swallowing reference paragraphs, preventing Word from blanking out the bibliography.
+    """
+    if target_para is None and len(doc.paragraphs) > 0:
+        target_para = doc.paragraphs[-1]
+    if target_para is None:
+        return
     instr = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY'
-    p_first, p_last = first_para._p, last_para._p
-    pPr = p_first.find(qn('w:pPr'))
-    prev = pPr
-    for e in (fld_run('begin'), fld_run('instr', instr), fld_run('separate')):
-        if prev is None:
-            p_first.insert(0, e)
-        else:
-            prev.addnext(e)
-        prev = e
-    p_last.append(fld_run('end'))
+    p = target_para._p
+    for e in (fld_run('begin'), fld_run('instr', instr), fld_run('separate'), fld_run('end')):
+        p.append(e)
 
 def inject_doc_prefs(doc, style_id=DEFAULT_STYLE, style_name=DEFAULT_STYLE_NAME, library_id=1):
     prefs = {
@@ -411,19 +496,19 @@ def link_docx_manuscript(
         inject_citation_field(sup_el, citation_json)
 
     # Reorder and renumber bibliography paragraphs in the Word XML
-    ref_start_re = re.compile(r'^(\d{1,3})\.\s*(.*)$')
-    ref_paras_info = []
-    for p in doc.paragraphs:
-        m = ref_start_re.match(p.text.strip())
-        if m:
-            old_n = int(m.group(1))
-            new_n = mapping.get(old_n, old_n)
-            ref_paras_info.append((old_n, new_n, p, m))
+    header_idx, start_idx, end_idx = find_reference_section_bounds(doc)
+    candidate_paras = doc.paragraphs[start_idx:end_idx]
+    blocks = extract_atomic_reference_blocks(candidate_paras, mapping)
 
-    if ref_paras_info:
-        # Re-number the prefix of each paragraph: replace "old_n. " with "new_n. "
-        for old_n, new_n, p, m in ref_paras_info:
-            old_prefix = m.group(1) + "."
+    if blocks:
+        # Re-number the prefix of each reference block: replace "old_n." with "new_n."
+        for b in blocks:
+            old_n = b.old_n
+            new_n = b.new_n
+            p = b.primary_para
+            m = b.match_obj
+
+            old_prefix = f"{old_n}."
             new_prefix = f"{new_n}."
             rest_content = m.group(2)
 
@@ -439,61 +524,105 @@ def link_docx_manuscript(
                 elif isinstance(v, dict):
                     candidate_doi = (v.get('recovered_doi') or v.get('doi') or '').strip()
 
-            if candidate_doi and candidate_doi not in p.text:
+            block_full_text = " ".join(bp.text for bp in b.paragraphs)
+            if candidate_doi and candidate_doi not in block_full_text:
                 recovered_doi = f"https://doi.org/{candidate_doi}" if not candidate_doi.startswith("http") else candidate_doi
 
             if track_changes and tracker:
                 if old_n != new_n:
                     replaced = False
+                    # Locate the leading run that begins with old_prefix
+                    leading_run = None
                     for r in p.runs:
-                        if old_prefix in r.text:
-                            parts = r.text.split(old_prefix, 1)
-                            r.text = parts[0]
-                            del_el = make_del_element(old_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
-                            ins_el = make_ins_element(new_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
-                            r._r.addnext(del_el)
-                            del_el.addnext(ins_el)
-                            if parts[1]:
-                                ins_el.addnext(make_text_run(r, parts[1]))
-                            replaced = True
+                        if r.text and r.text.strip():
+                            leading_run = r
                             break
+
+                    if leading_run is not None:
+                        l_txt = leading_run.text
+                        l_stripped = l_txt.lstrip()
+                        indent = l_txt[:len(l_txt) - len(l_stripped)]
+                        if l_stripped.startswith(old_prefix):
+                            after_prefix = l_stripped[len(old_prefix):]
+                            leading_run.text = indent
+                            del_el = make_del_element(old_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=leading_run)
+                            ins_el = make_ins_element(new_prefix, tracker.next_id(), tracker.author, tracker.date_str, model_run=leading_run)
+                            leading_run._r.addnext(del_el)
+                            del_el.addnext(ins_el)
+                            if after_prefix:
+                                ins_el.addnext(make_text_run(leading_run, after_prefix))
+                            replaced = True
+
                     if not replaced and p.runs:
+                        # Fallback: strict schema-compliant insertion after <w:pPr>
                         del_el = make_del_element(f"{old_n}. ", tracker.next_id(), tracker.author, tracker.date_str)
                         ins_el = make_ins_element(f"{new_n}. ", tracker.next_id(), tracker.author, tracker.date_str)
-                        p._p.insert(0, ins_el)
-                        p._p.insert(0, del_el)
+                        pPr = p._p.find(qn('w:pPr'))
+                        if pPr is not None:
+                            pPr.addnext(ins_el)
+                            pPr.addnext(del_el)
+                        else:
+                            p._p.insert(0, ins_el)
+                            p._p.insert(0, del_el)
                         p.runs[0].text = rest_content
+
                 if recovered_doi:
                     ins_doi = make_ins_element(f" {recovered_doi}", tracker.next_id(), tracker.author, tracker.date_str)
-                    p._p.append(ins_doi)
+                    b.paragraphs[-1]._p.append(ins_doi)
             else:
-                replaced = False
-                for r in p.runs:
-                    if old_prefix in r.text:
-                        r.text = r.text.replace(old_prefix, new_prefix, 1)
-                        replaced = True
-                        break
-                if not replaced and p.runs:
-                    p.runs[0].text = f"{new_n}. " + rest_content
-                    for r in p.runs[1:]:
-                        r.text = ""
-                if recovered_doi:
-                    p.add_run(f" {recovered_doi}")
+                if old_n != new_n:
+                    replaced = False
+                    leading_run = None
+                    for r in p.runs:
+                        if r.text and r.text.strip():
+                            leading_run = r
+                            break
 
-        # Re-order the paragraphs in the document XML according to new_n
-        if renumber_ama and len(ref_paras_info) > 1:
-            first_p_elem = ref_paras_info[0][2]._p
-            parent = first_p_elem.getparent()
-            if parent is not None:
-                insert_idx = parent.index(first_p_elem)
-                sorted_by_new = sorted(ref_paras_info, key=lambda item: item[1])
-                for idx, (old_n, new_n, p, m) in enumerate(sorted_by_new):
-                    parent.insert(insert_idx + idx, p._p)
-                inject_bibliography_field(doc, sorted_by_new[0][2], sorted_by_new[-1][2])
+                    if leading_run is not None:
+                        l_txt = leading_run.text
+                        l_stripped = l_txt.lstrip()
+                        indent = l_txt[:len(l_txt) - len(l_stripped)]
+                        if l_stripped.startswith(old_prefix):
+                            after_prefix = l_stripped[len(old_prefix):]
+                            leading_run.text = indent + new_prefix + after_prefix
+                            replaced = True
+
+                    if not replaced and p.runs:
+                        p.runs[0].text = f"{new_n}. " + rest_content
+                        for r in p.runs[1:]:
+                            r.text = ""
+
+                if recovered_doi:
+                    b.paragraphs[-1].add_run(f" {recovered_doi}")
+
+        # Re-order the atomic reference blocks in the document XML according to new_n
+        if renumber_ama and len(blocks) > 1:
+            sorted_blocks = sorted(blocks, key=lambda item: item.new_n)
+            # Find the anchor element immediately preceding the reference section
+            if header_idx is not None and header_idx < len(doc.paragraphs):
+                anchor_el = doc.paragraphs[header_idx]._p
             else:
-                inject_bibliography_field(doc, ref_paras_info[0][2], ref_paras_info[-1][2])
-        else:
-            inject_bibliography_field(doc, ref_paras_info[0][2], ref_paras_info[-1][2])
+                anchor_el = blocks[0].paragraphs[0]._p.getprevious()
+
+            if anchor_el is not None:
+                curr_anchor = anchor_el
+                for b in sorted_blocks:
+                    for bp in b.paragraphs:
+                        curr_anchor.addnext(bp._p)
+                        curr_anchor = bp._p
+            else:
+                parent = blocks[0].paragraphs[0]._p.getparent()
+                if parent is not None:
+                    for idx, b in enumerate(sorted_blocks):
+                        for sub_idx, bp in enumerate(b.paragraphs):
+                            parent.insert(idx + sub_idx, bp._p)
+
+        # Inject self-contained bibliography field marker on REFERENCES header
+        if not track_changes:
+            if header_idx is not None and header_idx < len(doc.paragraphs):
+                inject_bibliography_field(doc, doc.paragraphs[header_idx])
+            elif blocks:
+                inject_bibliography_field(doc, blocks[0].primary_para)
 
     # Inject AMA doc prefs
     inject_doc_prefs(doc, DEFAULT_STYLE, DEFAULT_STYLE_NAME, library_id=1)

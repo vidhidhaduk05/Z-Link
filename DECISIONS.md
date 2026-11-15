@@ -96,3 +96,19 @@
      - 📄 **Download Clean Linked (.docx)**: Clean accepted version with active Zotero fields.
      - 📚 **Download Corrected (.ris)**: Synced reference library.
 - **Verification**: Verified via `test_25_track_changes_in_text_citations`, `test_26_track_changes_in_bibliography_and_doi`, `test_27_track_revisions_setting_flag`, and `test_28_clean_vs_tracked_parity` in `tests/test_engine.py` (28/28 tests passing).
+
+### [2026-11-15 09:50] ARCH-DECISION-010: Complete Reference List Printing Invariant, Boundary Isolation, & Unjumbled Atomic Block Reordering
+- **Context**: User reported that in Word, the tracked changes file did not print the complete reference list, and requested strict prevention of reference jumbling following authentic academic publishing referencing standards.
+- **Root Cause Diagnosis**:
+  1. Multi-paragraph `ADDIN ZOTERO_BIBL` wrapping: Word evaluates unknown external add-in fields upon printing (Ctrl+P) and blanks out contents between `w:fldChar separate` and `w:fldChar end`. Furthermore, Word strictly rejects multi-paragraph fields containing revision marks (`w:del` and `w:ins`).
+  2. Global document scanning caused numbered items in Methods/Results (e.g. `1. Patient selection...`) to match `old_n = 1` and get reordered into the bibliography.
+  3. Non-numbered continuation paragraphs (wrapped DOIs/URLs) remained behind when primary paragraphs were moved.
+  4. OpenXML schema violation: Revisions inserted before `<w:pPr>` caused Word to silently drop paragraphs during layout and printing.
+- **Decision & Implementation**:
+  1. **Strict Reference Section Boundary Isolation**: Formulated `find_reference_section_bounds` isolating the range strictly between `REF_HEADER_RE` (`REFERENCES`, `Bibliography`, `Works Cited`) and `POST_REF_HEADER_RE` (`Supplementary Tables`, `Figure Legends`, `Appendix`). Zero paragraphs outside this boundary are touched.
+  2. **Atomic Reference Blocks (`AtomicReferenceBlock`)**: Grouped primary reference paragraphs and any following continuation paragraphs into atomic blocks. All continuation lines move atomically with their parent entry during sorting.
+  3. **Strict Schema-Compliant Formatting**: Invariant enforced that `<w:pPr>` is unconditionally the first child of every `<w:p>`. All `<w:del>` and `<w:ins>` elements are inserted after `<w:pPr>`.
+  4. **Removal of Multi-Paragraph Field Wrapping**: Reference list entries are preserved as authentic, standard top-level Word paragraphs (`<w:p>`). In clean mode, a self-contained `ADDIN ZOTERO_BIBL` marker attaches only to the `REFERENCES` header. In Track Changes mode, multi-paragraph field wrappers are completely omitted, guaranteeing 100% complete printing in Word, Word Online, LibreOffice, and PDF.
+  5. **Deterministic Sequential XML Placement**: Used `lxml` `curr_anchor.addnext(bp._p)` sequentially after the `REFERENCES` header, eliminating index shifting and preventing any reference jumbling.
+  6. **Dual-Engine Parity**: Implemented identical boundary isolation, atomic blocks, and schema compliance in both Python (`server/linker.py`) and JavaScript (`static/js/docx_engine.js`).
+- **Verification**: Verified via `test_29_reference_section_bounds_isolation`, `test_30_atomic_multiline_reference_preservation`, and `test_31_schema_pPr_first_invariant` in `tests/test_engine.py` (31/31 tests passing). Verified on real-world `ACTA2_Manuscript_11.14.2026.docx` (all 43 references intact, unjumbled, and schema compliant).

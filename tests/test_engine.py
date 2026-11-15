@@ -733,6 +733,102 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIsNotNone(doc_tracked.settings._element.find(qn('w:trackRevisions')))
         self.assertEqual(len(doc_clean.paragraphs), len(doc_tracked.paragraphs))
 
+    def test_29_reference_section_bounds_isolation(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+
+        doc = docx.Document()
+        doc.add_paragraph("METHODS")
+        doc.add_paragraph("1. Inclusion criteria: confirmed diagnosis.")
+        doc.add_paragraph("2. Exclusion criteria: secondary etiology.")
+        doc.add_paragraph("RESULTS")
+        doc.add_paragraph("Pioneer study demonstrated clinical benefit [2]. Later verified [1].")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Alpha A. First paper. Lancet. 2010.")
+        doc.add_paragraph("2. Beta B. Second paper. Nature. 2012.")
+        doc.add_paragraph("SUPPLEMENTARY MATERIAL")
+        doc.add_paragraph("1. Supplementary Table 1. Demographics.")
+
+        buf = BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(buf, citation_format="bracket")
+        buf.seek(0)
+
+        out_buf = BytesIO()
+        link_docx_manuscript(buf, sites, refs, output_target=out_buf, track_changes=True, renumber_ama=True)
+        out_buf.seek(0)
+
+        out_doc = docx.Document(out_buf)
+        # Methods numbered lists must be completely untouched and remain at paragraphs 1 and 2
+        self.assertTrue(out_doc.paragraphs[1].text.strip().startswith("1. Inclusion criteria"))
+        self.assertTrue(out_doc.paragraphs[2].text.strip().startswith("2. Exclusion criteria"))
+
+        # References must be reordered: Beta B (cited first) comes before Alpha A
+        ref_header_idx = [i for i, p in enumerate(out_doc.paragraphs) if p.text.strip() == "REFERENCES"][0]
+        self.assertIn("Beta B", out_doc.paragraphs[ref_header_idx + 1].text)
+        self.assertIn("Alpha A", out_doc.paragraphs[ref_header_idx + 2].text)
+
+        # Supplementary materials must be untouched
+        self.assertTrue(out_doc.paragraphs[ref_header_idx + 4].text.strip().startswith("1. Supplementary Table 1"))
+
+    def test_30_atomic_multiline_reference_preservation(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+
+        doc = docx.Document()
+        doc.add_paragraph("Early text cites [2].")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. First Author. First Article. Journal. 2010.")
+        doc.add_paragraph("2. Second Author. Second Article. Journal. 2015.")
+        doc.add_paragraph("   doi: 10.1016/j.cell.2015.01.001 (continuation line)")
+
+        buf = BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(buf, citation_format="bracket")
+        buf.seek(0)
+
+        out_buf = BytesIO()
+        link_docx_manuscript(buf, sites, refs, output_target=out_buf, track_changes=True, renumber_ama=True)
+        out_buf.seek(0)
+
+        out_doc = docx.Document(out_buf)
+        ref_header_idx = [i for i, p in enumerate(out_doc.paragraphs) if p.text.strip() == "REFERENCES"][0]
+        # Second Author was cited first, so it becomes reference #1
+        self.assertIn("Second Author", out_doc.paragraphs[ref_header_idx + 1].text)
+        # Continuation line must remain immediately following Second Author!
+        self.assertIn("continuation line", out_doc.paragraphs[ref_header_idx + 2].text)
+        # First Author is now reference #2
+        self.assertIn("First Author", out_doc.paragraphs[ref_header_idx + 3].text)
+
+    def test_31_schema_pPr_first_invariant(self):
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from docx.oxml.ns import qn
+
+        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if not os.path.exists(doc_path):
+            self.skipTest("ACTA2 manuscript not present")
+
+        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        out_buf = BytesIO()
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_buf, track_changes=True, renumber_ama=True)
+        out_buf.seek(0)
+
+        out_doc = docx.Document(out_buf)
+        # Verify that for every single paragraph in the output document:
+        # If w:pPr exists, it is strictly the first child of w:p
+        for i, p in enumerate(out_doc.paragraphs):
+            pPr = p._p.find(qn('w:pPr'))
+            if pPr is not None:
+                self.assertEqual(
+                    p._p[0].tag, qn('w:pPr'),
+                    f"Paragraph {i} violates OpenXML schema: w:pPr is not the first child"
+                )
+
 if __name__ == "__main__":
     unittest.main()
 
