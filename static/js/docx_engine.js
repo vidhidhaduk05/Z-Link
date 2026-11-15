@@ -585,12 +585,221 @@ export function buildAmaRenumberingMap(references, sites) {
   return { mapping, firstSeenOrder, uncited };
 }
 
+function appendAuditLedgerToDocx(xmlDoc, parsedData, verdicts, amaMapping) {
+  const references = parsedData.references || [];
+  if (references.length === 0) return;
+
+  const body = xmlDoc.getElementsByTagNameNS(W_NS, "body")[0];
+  if (!body) return;
+
+  const bodySectPr = Array.from(body.childNodes).find(n => n.nodeType === 1 && n.localName === "sectPr");
+
+  function insertNode(node) {
+    if (bodySectPr) {
+      body.insertBefore(node, bodySectPr);
+    } else {
+      body.appendChild(node);
+    }
+  }
+
+  // Heading paragraph
+  const pHead = xmlDoc.createElementNS(W_NS, "w:p");
+  const pPrHead = xmlDoc.createElementNS(W_NS, "w:pPr");
+  const spHead = xmlDoc.createElementNS(W_NS, "w:spacing");
+  spHead.setAttributeNS(W_NS, "w:before", "480");
+  spHead.setAttributeNS(W_NS, "w:after", "120");
+  pPrHead.appendChild(spHead);
+  pHead.appendChild(pPrHead);
+
+  const rHead = xmlDoc.createElementNS(W_NS, "w:r");
+  const rPrHead = xmlDoc.createElementNS(W_NS, "w:rPr");
+  const bHead = xmlDoc.createElementNS(W_NS, "w:b");
+  const szHead = xmlDoc.createElementNS(W_NS, "w:sz");
+  szHead.setAttributeNS(W_NS, "w:val", "26"); // 13pt
+  const colorHead = xmlDoc.createElementNS(W_NS, "w:color");
+  colorHead.setAttributeNS(W_NS, "w:val", "3A0F34");
+  rPrHead.appendChild(bHead);
+  rPrHead.appendChild(szHead);
+  rPrHead.appendChild(colorHead);
+  rHead.appendChild(rPrHead);
+
+  const tHead = xmlDoc.createElementNS(W_NS, "w:t");
+  tHead.textContent = "Co-Scientist Reference Audit & Reachability Ledger";
+  rHead.appendChild(tHead);
+  pHead.appendChild(rHead);
+  insertNode(pHead);
+
+  // Subtitle paragraph
+  const pSub = xmlDoc.createElementNS(W_NS, "w:p");
+  const pPrSub = xmlDoc.createElementNS(W_NS, "w:pPr");
+  const spSub = xmlDoc.createElementNS(W_NS, "w:spacing");
+  spSub.setAttributeNS(W_NS, "w:after", "240");
+  pPrSub.appendChild(spSub);
+  pSub.appendChild(pPrSub);
+
+  const rSub = xmlDoc.createElementNS(W_NS, "w:r");
+  const rPrSub = xmlDoc.createElementNS(W_NS, "w:rPr");
+  const iSub = xmlDoc.createElementNS(W_NS, "w:i");
+  const szSub = xmlDoc.createElementNS(W_NS, "w:sz");
+  szSub.setAttributeNS(W_NS, "w:val", "19"); // 9.5pt
+  const colorSub = xmlDoc.createElementNS(W_NS, "w:color");
+  colorSub.setAttributeNS(W_NS, "w:val", "62535D");
+  rPrSub.appendChild(iSub);
+  rPrSub.appendChild(szSub);
+  rPrSub.appendChild(colorSub);
+  rSub.appendChild(rPrSub);
+
+  const tSub = xmlDoc.createElementNS(W_NS, "w:t");
+  tSub.textContent = `Independent scholarly verification across Crossref, DOI Foundation Handle Registry, Europe PMC, and OpenAlex. Audited ${references.length} bibliography references. Formatted for peer review verification.`;
+  rSub.appendChild(tSub);
+  pSub.appendChild(rSub);
+  insertNode(pSub);
+
+  // Table
+  const tbl = xmlDoc.createElementNS(W_NS, "w:tbl");
+  const tblPr = xmlDoc.createElementNS(W_NS, "w:tblPr");
+  const tblW = xmlDoc.createElementNS(W_NS, "w:tblW");
+  tblW.setAttributeNS(W_NS, "w:w", "5000");
+  tblW.setAttributeNS(W_NS, "w:type", "pct");
+  tblPr.appendChild(tblW);
+
+  // Borders
+  const tblBorders = xmlDoc.createElementNS(W_NS, "w:tblBorders");
+  ["top", "left", "bottom", "right", "insideH", "insideV"].forEach(side => {
+    const b = xmlDoc.createElementNS(W_NS, `w:${side}`);
+    b.setAttributeNS(W_NS, "w:val", "single");
+    b.setAttributeNS(W_NS, "w:sz", "4");
+    b.setAttributeNS(W_NS, "w:space", "0");
+    b.setAttributeNS(W_NS, "w:color", "D2C2CB");
+    tblBorders.appendChild(b);
+  });
+  tblPr.appendChild(tblBorders);
+  tbl.appendChild(tblPr);
+
+  // Table Grid (<w:tblGrid> required by ISO/IEC 29500-1 schema)
+  const tblGrid = xmlDoc.createElementNS(W_NS, "w:tblGrid");
+  const colTitles = ["#", "Bibliographic Record", "DOI Identifier", "Audit Status", "Citations"];
+  const colWidths = ["800", "4200", "2200", "1800", "1000"];
+  colWidths.forEach(w => {
+    const gridCol = xmlDoc.createElementNS(W_NS, "w:gridCol");
+    gridCol.setAttributeNS(W_NS, "w:w", w);
+    tblGrid.appendChild(gridCol);
+  });
+  tbl.appendChild(tblGrid);
+
+  // Table Header Row
+  const trHdr = xmlDoc.createElementNS(W_NS, "w:tr");
+
+  colTitles.forEach((title, idx) => {
+    const tc = xmlDoc.createElementNS(W_NS, "w:tc");
+    const tcPr = xmlDoc.createElementNS(W_NS, "w:tcPr");
+    const tcW = xmlDoc.createElementNS(W_NS, "w:tcW");
+    tcW.setAttributeNS(W_NS, "w:w", colWidths[idx]);
+    tcW.setAttributeNS(W_NS, "w:type", "dxa");
+    tcPr.appendChild(tcW);
+
+    const shd = xmlDoc.createElementNS(W_NS, "w:shd");
+    shd.setAttributeNS(W_NS, "w:val", "clear");
+    shd.setAttributeNS(W_NS, "w:color", "auto");
+    shd.setAttributeNS(W_NS, "w:fill", "3A0F34");
+    tcPr.appendChild(shd);
+    tc.appendChild(tcPr);
+
+    const p = xmlDoc.createElementNS(W_NS, "w:p");
+    const r = xmlDoc.createElementNS(W_NS, "w:r");
+    const rPr = xmlDoc.createElementNS(W_NS, "w:rPr");
+    const b = xmlDoc.createElementNS(W_NS, "w:b");
+    const clr = xmlDoc.createElementNS(W_NS, "w:color");
+    clr.setAttributeNS(W_NS, "w:val", "FFFFFF");
+    const sz = xmlDoc.createElementNS(W_NS, "w:sz");
+    sz.setAttributeNS(W_NS, "w:val", "18");
+    rPr.appendChild(b);
+    rPr.appendChild(clr);
+    rPr.appendChild(sz);
+    r.appendChild(rPr);
+
+    const t = xmlDoc.createElementNS(W_NS, "w:t");
+    t.textContent = title;
+    r.appendChild(t);
+    p.appendChild(r);
+    tc.appendChild(p);
+    trHdr.appendChild(tc);
+  });
+  tbl.appendChild(trHdr);
+
+  // Data rows
+  const sortedRefs = [...references];
+  if (amaMapping) {
+    sortedRefs.sort((a, b) => (amaMapping[a.ref_num] || a.ref_num) - (amaMapping[b.ref_num] || b.ref_num));
+  }
+
+  sortedRefs.forEach(rItem => {
+    const oldN = rItem.ref_num;
+    const newN = (amaMapping && amaMapping[oldN]) || oldN;
+    const v = verdicts[oldN] || {};
+    const doiVal = v.recovered_doi || v.doi || rItem.doi || "";
+
+    let statusText = "Verified";
+    if (v.is_recovered || v.status === "recovered") {
+      statusText = "DOI Recovered";
+    } else if (v.is_bot_gated || v.status === "bot_protected") {
+      statusText = "Bot Gated / Paywall";
+    } else if (v.is_reachable || v.status === "verified") {
+      statusText = "Verified Live (200 OK)";
+    } else if (v.status === "unreachable") {
+      statusText = "Unreachable (404)";
+    } else if (!doiVal) {
+      statusText = "Missing DOI";
+    }
+
+    const tr = xmlDoc.createElementNS(W_NS, "w:tr");
+    const recTitle = v.crossref_title || rItem.title || rItem.raw_text.slice(0, 80);
+    const numDisplay = (newN === oldN) ? `[${newN}]` : `[${newN}] (Orig ${oldN})`;
+    const citCount = (parsedData.sites || []).filter(s => (s.nums || []).includes(oldN)).length;
+
+    const rowData = [numDisplay, recTitle, doiVal || "None", statusText, `${citCount}x`];
+
+    rowData.forEach((val, idx) => {
+      const tc = xmlDoc.createElementNS(W_NS, "w:tc");
+      const tcPr = xmlDoc.createElementNS(W_NS, "w:tcPr");
+      const tcW = xmlDoc.createElementNS(W_NS, "w:tcW");
+      tcW.setAttributeNS(W_NS, "w:w", colWidths[idx]);
+      tcW.setAttributeNS(W_NS, "w:type", "dxa");
+      tcPr.appendChild(tcW);
+      tc.appendChild(tcPr);
+
+      const p = xmlDoc.createElementNS(W_NS, "w:p");
+      const r = xmlDoc.createElementNS(W_NS, "w:r");
+      const rPr = xmlDoc.createElementNS(W_NS, "w:rPr");
+      const clr = xmlDoc.createElementNS(W_NS, "w:color");
+      clr.setAttributeNS(W_NS, "w:val", "4F444B");
+      const sz = xmlDoc.createElementNS(W_NS, "w:sz");
+      sz.setAttributeNS(W_NS, "w:val", "17"); // 8.5pt
+      rPr.appendChild(clr);
+      rPr.appendChild(sz);
+      r.appendChild(rPr);
+
+      const t = xmlDoc.createElementNS(W_NS, "w:t");
+      t.textContent = val;
+      r.appendChild(t);
+      p.appendChild(r);
+      tc.appendChild(p);
+      tr.appendChild(tc);
+    });
+
+    tbl.appendChild(tr);
+  });
+
+  insertNode(tbl);
+}
+
 export async function injectZoteroFieldsInBrowser(
   parsedData,
   verdicts = {},
   renumberAma = true,
   trackChanges = false,
-  author = "Co-Scientist"
+  author = "Co-Scientist",
+  includeAuditLedger = true
 ) {
   const { zip, xmlDoc, paragraphs, sites, references } = parsedData;
   let revCounter = 1;
@@ -787,13 +996,20 @@ export async function injectZoteroFieldsInBrowser(
 
       const v = verdicts[block.oldN] || {};
       let recoveredDoi = null;
-      if (v.doi && v.doi.trim()) {
-        const cleanDoi = v.doi.trim();
+      let candidateDoi = (v.recovered_doi || v.doi || '').trim();
+      if (!candidateDoi) {
+        const refObj = (parsedData.references || []).find(r => r.ref_num === block.oldN);
+        if (refObj && refObj.doi) {
+          candidateDoi = refObj.doi.trim();
+        }
+      }
+      if (candidateDoi) {
+        const cleanKey = candidateDoi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').trim();
         const blockFullText = block.paragraphs.map(bp => 
           Array.from(bp.getElementsByTagNameNS(W_NS, "t")).map(x => x.textContent).join("")
         ).join(" ");
-        if (!blockFullText.includes(cleanDoi)) {
-          recoveredDoi = cleanDoi.startsWith("http") ? cleanDoi : `https://doi.org/${cleanDoi}`;
+        if (cleanKey && !blockFullText.toLowerCase().includes(cleanKey.toLowerCase())) {
+          recoveredDoi = candidateDoi.startsWith("http") ? candidateDoi : (candidateDoi.startsWith("10.") ? `doi: ${candidateDoi}` : `https://doi.org/${cleanKey}`);
         }
       }
 
@@ -861,16 +1077,25 @@ export async function injectZoteroFieldsInBrowser(
 
       if (recoveredDoi) {
         const lastP = block.paragraphs[block.paragraphs.length - 1];
+        const sectPr = lastP.getElementsByTagNameNS(W_NS, "sectPr")[0];
         if (trackChanges) {
           const insDoi = createInsRun(xmlDoc, ` ${recoveredDoi}`, revCounter++, author, dateStr);
-          lastP.appendChild(insDoi);
+          if (sectPr) {
+            lastP.insertBefore(insDoi, sectPr);
+          } else {
+            lastP.appendChild(insDoi);
+          }
         } else {
           const rDoi = xmlDoc.createElementNS(W_NS, "w:r");
           const tDoi = xmlDoc.createElementNS(W_NS, "w:t");
           tDoi.setAttribute("xml:space", "preserve");
           tDoi.textContent = ` ${recoveredDoi}`;
           rDoi.appendChild(tDoi);
-          lastP.appendChild(rDoi);
+          if (sectPr) {
+            lastP.insertBefore(rDoi, sectPr);
+          } else {
+            lastP.appendChild(rDoi);
+          }
         }
       }
     });
@@ -934,6 +1159,11 @@ export async function injectZoteroFieldsInBrowser(
     firstDocP.insertBefore(createFieldRun(xmlDoc, "separate"), firstDocP.firstChild);
     firstDocP.insertBefore(createFieldRun(xmlDoc, "instr", prefInstr), firstDocP.firstChild);
     firstDocP.insertBefore(createFieldRun(xmlDoc, "begin"), firstDocP.firstChild);
+  }
+
+  // Append Co-Scientist Reference Audit & Reachability Ledger Table
+  if (includeAuditLedger && references && references.length > 0) {
+    appendAuditLedgerToDocx(xmlDoc, parsedData, verdicts, mapping);
   }
 
   // Enable Track Changes in word/settings.xml if requested

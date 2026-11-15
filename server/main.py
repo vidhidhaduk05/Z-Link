@@ -75,7 +75,9 @@ def execute_job_linking(job: JobRecord):
             verdicts=job.verdicts,
             output_target=clean_stream,
             renumber_ama=True,
-            track_changes=False
+            track_changes=False,
+            mappings=job.mappings,
+            include_audit_ledger=True
         )
         job.linked_bytes = clean_stream.getvalue()
 
@@ -88,7 +90,9 @@ def execute_job_linking(job: JobRecord):
             output_target=tracked_stream,
             renumber_ama=True,
             track_changes=True,
-            author="Co-Scientist"
+            author="Co-Scientist",
+            mappings=job.mappings,
+            include_audit_ledger=True
         )
         job.tracked_bytes = tracked_stream.getvalue()
         job.ris_text = generate_ris(job.references, job.verdicts, mapping=job.mapping)

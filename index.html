@@ -163,6 +163,9 @@
           <p>Download the marked-up manuscript with native Track Changes for reviewers, the clean Zotero-linked document, and the RIS library.</p>
         </div>
         <div class="tray-buttons">
+          <button class="btn-editorial-primary" id="btnViewAuditReport" style="background-color: #3a0f34;">
+            📊 View Full Audit Report
+          </button>
           <button class="btn-editorial-primary" id="btnDownloadTrackedDocx" style="background-color: #814d75;">
             📝 Download Tracked Changes (.docx)
           </button>
@@ -228,6 +231,27 @@
     </section>
 
   </main>
+
+  <!-- Referee Audit Report Modal -->
+  <div id="auditReportModal" class="editorial-modal-backdrop" style="display: none;">
+    <div class="editorial-modal-sheet">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3 class="modal-title">Co-Scientist Scholarly Reference Audit Report</h3>
+          <p class="modal-sub">Comprehensive bibliographic reachability, DOI recovery & AMA citation analysis</p>
+        </div>
+        <button class="modal-close-btn" id="btnCloseAuditModal" title="Close report">&times;</button>
+      </div>
+      <div class="modal-body" id="auditReportModalBody">
+        <!-- Rendered via JS -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn-editorial-secondary" id="btnCopyAuditReport">📋 Copy Report to Clipboard</button>
+        <button class="btn-editorial-primary" id="btnPrintAuditReport">🖨️ Print / Save PDF</button>
+        <button class="btn-editorial-secondary" id="btnCloseAuditModalFooter">Close</button>
+      </div>
+    </div>
+  </div>
 
   <footer class="site-footer">
     <p class="footer-credit">

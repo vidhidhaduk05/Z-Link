@@ -17,6 +17,7 @@ let appState = {
   selectedRefNum: 1,
   backendUrl: '' // optional
 };
+window.appState = appState;
 
 // DOM Elements
 const dropzone = document.getElementById('dropzone');
@@ -223,6 +224,12 @@ async function handleFileSelected(file) {
   let botGatedCount = 0;
   let brokenCount = 0;
 
+  // Initial sentence & usage mapping and instant audit table display so the user sees the audit immediately!
+  computeUsageMappings();
+  renderAuditTable();
+  renderManuscriptExplorer();
+  updateActiveReferenceCard(1);
+
   // Process references through a concurrency-controlled queue to respect registry rate limits
   const CONCURRENCY_LIMIT = 3;
   const refsQueue = [...appState.parsedData.references];
@@ -244,6 +251,9 @@ async function handleFileSelected(file) {
       if (metricBotGated) metricBotGated.textContent = botGatedCount;
       metricBroken.textContent = brokenCount;
 
+      // Update the specific row dynamically in real time
+      updateAuditTableRow(ref.ref_num);
+
       // Polite 80ms interval
       await new Promise(r => setTimeout(r, 80));
     }
@@ -252,14 +262,13 @@ async function handleFileSelected(file) {
   const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, refsQueue.length) }, () => validationWorker());
   await Promise.all(workers);
 
-  // 3. Sentence & Usage Mapping
+  // 3. Re-compute sentence & usage mappings and finalize display
   appState.fsmState = 'MAPPING';
   setStepper('mapping');
   computeUsageMappings();
 
-  // 4. Render UI
+  // 4. Final UI Refresh
   renderAuditTable();
-  renderManuscriptExplorer();
   updateActiveReferenceCard(1);
 
   // 5. Ready for Linking & Download
@@ -351,9 +360,11 @@ function renderAuditTable() {
 
   references.forEach(ref => {
     const v = appState.verdicts[ref.ref_num] || {};
-    const m = appState.mappings[ref.ref_num] || { occurrences: [] };
+    const m = (appState.mappings && appState.mappings[ref.ref_num]) || { occurrences: [] };
 
     const tr = document.createElement('tr');
+    tr.id = 'ref-row-' + ref.ref_num;
+    tr.dataset.refNum = ref.ref_num;
     tr.style.cursor = 'pointer';
     tr.addEventListener('click', () => {
       updateActiveReferenceCard(ref.ref_num);
@@ -388,6 +399,14 @@ function renderAuditTable() {
     } else if (v.status === 'unreachable') {
       badgeClass = 'broken';
       badgeText = '❌ Unresolvable (404)';
+    } else if (!v.status) {
+      if (ref.doi) {
+        badgeClass = 'registry';
+        badgeText = '⏳ Auditing...';
+      } else {
+        badgeClass = 'registry';
+        badgeText = '🔍 Searching DOI...';
+      }
     }
 
     const titleDisplay = v.crossref_title || ref.title || ref.raw_text.slice(0, 75);
@@ -421,6 +440,79 @@ function renderAuditTable() {
     `;
     tableBody.appendChild(tr);
   });
+}
+
+function updateAuditTableRow(refNum) {
+  const tr = document.getElementById('ref-row-' + refNum);
+  if (!tr || !appState.parsedData) return;
+  const ref = appState.parsedData.references.find(r => r.ref_num === refNum);
+  if (!ref) return;
+
+  const v = appState.verdicts[refNum] || {};
+  const m = (appState.mappings && appState.mappings[refNum]) || { occurrences: [] };
+
+  let badgeClass = 'missing';
+  let badgeText = 'No DOI';
+  let actionBtnHtml = '';
+  let autoRecoveredPill = '';
+
+  if (v.status === 'recovered' || v.is_recovered) {
+    badgeClass = 'recovered';
+    badgeText = '🔍 DOI Recovered';
+    const regSource = v.recovery_source || "Registry";
+    autoRecoveredPill = `<span class="badge-auto-recovered" title="Automatically matched and verified via ${regSource}">Auto-Found (${regSource})</span>`;
+    if (ref.doi) {
+      actionBtnHtml = `<a href="https://doi.org/${encodeURIComponent(ref.doi)}" target="_blank" class="btn-open-ext" title="Verify auto-recovered DOI landing">Verify ↗</a>`;
+    }
+  } else if (v.status === 'bot_protected' || v.is_bot_gated) {
+    badgeClass = 'bot-protected';
+    badgeText = '🛡️ Bot Check / Paywall';
+    if (ref.doi) {
+      actionBtnHtml = `<a href="https://doi.org/${encodeURIComponent(ref.doi)}" target="_blank" class="btn-open-ext" title="Open directly in browser to view article or solve publisher verification">Verify ↗</a>`;
+    }
+  } else if (v.status === 'verified' || (v.is_reachable && !v.is_bot_gated)) {
+    badgeClass = 'reachable';
+    badgeText = '🟢 Verified Live (200)';
+    if (ref.doi) {
+      actionBtnHtml = `<a href="https://doi.org/${encodeURIComponent(ref.doi)}" target="_blank" class="btn-open-ext" title="Open article landing in new tab">Open ↗</a>`;
+    }
+  } else if (v.status === 'unreachable') {
+    badgeClass = 'broken';
+    badgeText = '❌ Unresolvable (404)';
+  }
+
+  const titleDisplay = v.crossref_title || ref.title || ref.raw_text.slice(0, 75);
+  const authorDisplay = (v.crossref_authors && v.crossref_authors.length > 0)
+    ? v.crossref_authors.slice(0, 3).join(', ') + (v.crossref_authors.length > 3 ? ' et al.' : '')
+    : (ref.authors.slice(0, 2).join(', ') || '—');
+
+  const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
+  const isRenumbered = amaNum !== ref.ref_num;
+  const renumberedTag = isRenumbered 
+    ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ AMA #${amaNum}</span>` 
+    : '';
+
+  tr.innerHTML = `
+    <td class="ref-num-cell">[${ref.ref_num}]${renumberedTag}</td>
+    <td>
+      <strong>${titleDisplay}</strong><br/>
+      <span style="color: var(--reading-ink-secondary); font-size: 12px;">${authorDisplay}</span>
+      ${v.crossref_journal ? `<br/><em style="color: var(--editorial-plum); font-size: 12px;">${v.crossref_journal} (${v.crossref_year || ''})</em>` : ''}
+    </td>
+    <td>
+      ${ref.doi ? `<a href="https://doi.org/${ref.doi}" target="_blank" style="color: var(--editorial-plum); word-break: break-all;">${ref.doi}</a> ${autoRecoveredPill}` : '<span style="color: var(--reading-ink-muted)">Missing</span>'}
+    </td>
+    <td style="white-space: nowrap;">
+      <span class="badge-reach ${badgeClass}">${badgeText}</span>
+      ${actionBtnHtml}
+    </td>
+    <td style="text-align: center; font-weight: 600;">
+      ${m.occurrences.length}
+    </td>
+  `;
+  tr.classList.remove('row-auditing');
+  tr.classList.add('row-updated');
+  setTimeout(() => tr.classList.remove('row-updated'), 700);
 }
 
 function renderManuscriptExplorer() {
@@ -487,7 +579,18 @@ function updateActiveReferenceCard(refNum) {
   let statusBadgeClass = 'reachable';
   let explanationBox = '';
 
-  if (v.status === 'bot_protected' || v.is_bot_gated) {
+  if (v.status === 'recovered' || v.is_recovered) {
+    statusBadgeText = '🔍 DOI Recovered';
+    statusBadgeClass = 'recovered';
+    const regSource = v.recovery_source || "Registry";
+    explanationBox = `
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 10px 14px; font-size: 12px; margin-bottom: 14px; line-height: 1.5; border-radius: 4px;">
+        <strong>🔍 Auto-Recovered Missing DOI:</strong><br/>
+        This reference lacked a DOI in the original manuscript. The multi-registry search engine located and verified this article in <strong>${regSource}</strong> with active DOI <code>${ref.doi}</code>.<br/>
+        <em>✓ The recovered DOI has been automatically inserted into your Word deliverables and linked in your Zotero export.</em>
+      </div>
+    `;
+  } else if (v.status === 'bot_protected' || v.is_bot_gated) {
     statusBadgeText = '🛡️ Bot Check / Paywall';
     statusBadgeClass = 'bot-protected';
     explanationBox = `
@@ -557,7 +660,197 @@ function highlightSentenceInManuscript(refNum) {
   }
 }
 
-// ---------------- Deliverables Center ----------------
+// ---------------- Deliverables Center & Audit Report Modal ----------------
+
+const btnViewAuditReport = document.getElementById('btnViewAuditReport');
+const auditReportModal = document.getElementById('auditReportModal');
+const auditReportModalBody = document.getElementById('auditReportModalBody');
+const btnCloseAuditModal = document.getElementById('btnCloseAuditModal');
+const btnCloseAuditModalFooter = document.getElementById('btnCloseAuditModalFooter');
+const btnCopyAuditReport = document.getElementById('btnCopyAuditReport');
+const btnPrintAuditReport = document.getElementById('btnPrintAuditReport');
+
+function generateAuditReportHtml() {
+  if (!appState.parsedData) return "<p>No manuscript audited yet. Upload a .docx manuscript to generate a complete verification report.</p>";
+  const { references, sites } = appState.parsedData;
+  const reachableCount = metricReachable.textContent;
+  const botCount = metricBotGated ? metricBotGated.textContent : "0";
+  const brokenCount = metricBroken.textContent;
+  const seqText = metricSequence.textContent || "Consecutive (Valid 1..N)";
+
+  let html = `
+    <div style="margin-bottom: 20px; padding: 16px 20px; background: #faf7f9; border: 1px solid var(--border-outline); border-radius: 6px;">
+      <h3 style="margin-top: 0; color: var(--primary-wine); font-family: var(--font-headline); font-size: 1.15rem;">Manuscript: ${appState.fileName}</h3>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; font-size: 12px;">
+        <div><strong>Total In-Text Citations:</strong> ${sites.length}</div>
+        <div><strong>Bibliography References:</strong> ${references.length}</div>
+        <div><strong>Live Reachable:</strong> <span style="color: #16a34a; font-weight: 600;">${reachableCount}</span></div>
+        <div><strong>Bot Protected / Paywall:</strong> <span style="color: #b45309; font-weight: 600;">${botCount}</span></div>
+        <div><strong>Unresolvable (404):</strong> <span style="color: #dc2626; font-weight: 600;">${brokenCount}</span></div>
+        <div><strong>AMA Sequence:</strong> ${seqText}</div>
+      </div>
+    </div>
+
+    <h4 style="font-family: var(--font-headline); color: var(--primary-wine); font-size: 1.05rem; margin-top: 1.4rem;">Scholarly Reference Audit & Reachability Findings</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Bibliographic Record</th>
+          <th>DOI Identifier</th>
+          <th>Verification Status</th>
+          <th style="text-align: center;">In-Text Mentions</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  references.forEach(r => {
+    const v = appState.verdicts[r.ref_num] || {};
+    const m = (appState.mappings && appState.mappings[r.ref_num]) || { occurrences: [] };
+    const amaNum = (appState.amaMapping && appState.amaMapping[r.ref_num]) || r.ref_num;
+    const numDisplay = (amaNum === r.ref_num) ? `[${r.ref_num}]` : `[${r.ref_num}] → AMA #${amaNum}`;
+    const doiDisplay = r.doi ? `<a href="https://doi.org/${encodeURIComponent(r.doi)}" target="_blank" style="color: var(--editorial-plum);">${r.doi}</a>` : '<span style="color: #9ca3af;">Missing</span>';
+    
+    let statusBadge = '<span class="badge-reach missing">No DOI</span>';
+    if (v.status === 'recovered' || v.is_recovered) {
+      statusBadge = '<span class="badge-reach recovered">🔍 DOI Recovered</span>';
+    } else if (v.status === 'bot_protected' || v.is_bot_gated) {
+      statusBadge = '<span class="badge-reach bot-protected">🛡️ Bot Check / Paywall</span>';
+    } else if (v.status === 'verified' || (v.is_reachable && !v.is_bot_gated)) {
+      statusBadge = '<span class="badge-reach reachable">🟢 Verified Live</span>';
+    } else if (v.status === 'unreachable') {
+      statusBadge = '<span class="badge-reach broken">❌ Unresolvable (404)</span>';
+    }
+
+    const titleDisplay = v.crossref_title || r.title || r.raw_text.slice(0, 80);
+    const authorDisplay = (v.crossref_authors && v.crossref_authors.length > 0)
+      ? v.crossref_authors.slice(0, 3).join(', ') + (v.crossref_authors.length > 3 ? ' et al.' : '')
+      : (r.authors.slice(0, 2).join(', ') || '—');
+
+    html += `
+      <tr>
+        <td style="font-weight: 600; white-space: nowrap;">${numDisplay}</td>
+        <td>
+          <strong>${titleDisplay}</strong><br/>
+          <span style="font-size: 11px; color: #62535d;">${authorDisplay}</span>
+          ${v.crossref_journal ? `<br/><em style="color: #814d75; font-size: 11px;">${v.crossref_journal} (${v.crossref_year || ''})</em>` : ''}
+        </td>
+        <td style="word-break: break-all; font-size: 11px;">${doiDisplay}</td>
+        <td>${statusBadge}</td>
+        <td style="text-align: center; font-weight: 600;">${m.occurrences.length}x</td>
+      </tr>
+    `;
+  });
+
+  html += `
+      </tbody>
+    </table>
+  `;
+  return html;
+}
+
+if (btnViewAuditReport) {
+  btnViewAuditReport.addEventListener('click', () => {
+    if (!appState.parsedData) {
+      alert("Please upload or load a manuscript first.");
+      return;
+    }
+    auditReportModalBody.innerHTML = generateAuditReportHtml();
+    auditReportModal.style.display = 'flex';
+  });
+}
+
+if (btnCloseAuditModal) {
+  btnCloseAuditModal.addEventListener('click', () => {
+    auditReportModal.style.display = 'none';
+  });
+}
+
+if (btnCloseAuditModalFooter) {
+  btnCloseAuditModalFooter.addEventListener('click', () => {
+    auditReportModal.style.display = 'none';
+  });
+}
+
+if (auditReportModal) {
+  auditReportModal.addEventListener('click', (e) => {
+    if (e.target === auditReportModal) {
+      auditReportModal.style.display = 'none';
+    }
+  });
+}
+
+if (btnCopyAuditReport) {
+  btnCopyAuditReport.addEventListener('click', async () => {
+    if (!appState.parsedData) return;
+    const { references } = appState.parsedData;
+    const reportLines = [
+      `# Co-Scientist Reference Audit Report: ${appState.fileName}`,
+      `Generated by Co-Scientist Reference Auditor & Zotero Linker`,
+      ``,
+      `## Summary Metrics`,
+      `- Total In-Text Citations: ${appState.parsedData.sites.length}`,
+      `- Total Bibliography References: ${references.length}`,
+      `- Live Reachable: ${metricReachable.textContent}`,
+      `- Consecutive First-Mention Order: ${metricSequence.textContent}`,
+      ``,
+      `## Reference Verification Findings`
+    ];
+
+    references.forEach(r => {
+      const v = appState.verdicts[r.ref_num] || {};
+      const m = (appState.mappings && appState.mappings[r.ref_num]) || { occurrences: [] };
+      reportLines.push(`### [${r.ref_num}] ${v.crossref_title || r.title || r.raw_text.slice(0, 60)}`);
+      reportLines.push(`- **DOI:** ${r.doi || 'None'}`);
+      reportLines.push(`- **Status:** ${v.is_reachable ? 'Reachable (200 OK)' : 'Broken / Unreachable'}`);
+      if (v.is_recovered) reportLines.push(`- **DOI Auto-Recovery:** Found via ${v.recovery_source || 'Registry'}: ${v.recovered_doi}`);
+      if (v.resolved_url) reportLines.push(`- **Target URL:** ${v.resolved_url}`);
+      reportLines.push(`- **Manuscript Citations:** ${m.occurrences.length} time(s)`);
+      if (m.firstMentionSentence) reportLines.push(`- **Context:** "${m.firstMentionSentence}"`);
+      reportLines.push('');
+    });
+
+    try {
+      await navigator.clipboard.writeText(reportLines.join('\n'));
+      btnCopyAuditReport.textContent = '✓ Copied to Clipboard!';
+      setTimeout(() => { btnCopyAuditReport.textContent = '📋 Copy Report to Clipboard'; }, 2000);
+    } catch (err) {
+      alert("Failed to copy to clipboard: " + err.message);
+    }
+  });
+}
+
+if (btnPrintAuditReport) {
+  btnPrintAuditReport.addEventListener('click', () => {
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Reference Audit Report - ${appState.fileName}</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Georgia, serif; padding: 25px; color: #1a0017; }
+          h3, h4 { color: #3a0f34; }
+          table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }
+          th, td { border: 1px solid #d2c2cb; padding: 6px 10px; text-align: left; }
+          th { background: #3a0f34; color: #fff; }
+          tr:nth-child(even) { background: #fbf9f4; }
+        </style>
+      </head>
+      <body>
+        ${generateAuditReportHtml()}
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 300);
+  });
+}
 
 if (btnDownloadTrackedDocx) {
   btnDownloadTrackedDocx.addEventListener('click', async () => {

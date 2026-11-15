@@ -177,5 +177,20 @@
   5. Added `await fileOrBuffer.arrayBuffer()` conversion in `parseDocxFile` for reliable binary decoding across all browsers.
 - **Verification**: Verified live in headless Google Chrome using scratchpad CDP test scripts (`test_browser_live.py`, `test_browser_acta2_drag_drop.py`, `test_browser_click_upload.py`). Both `sample_radiology_manuscript.docx` and `ACTA2_Manuscript_11.14.2026.docx` drag and drop successfully with zero console errors, full table rendering, and functional deliverable downloads.
 
+### [2026-11-15 12:35] ARCH-DECISION-016: Reference Audit Display & Reliable DOI Insertion
+- **Context**: User requested: *"can you display the refrences audit also, when the refrences doesn't have doi , it is not inserting it ... can you please figure it out and plan first and then excecute it"*.
+- **Root Cause & Technical Constraints**:
+  1. In `static/js/crossref_audit.js`, `validateReferenceCrossref` returned `recovered_doi` but did not populate `doi: cleanDoi`. In `static/js/docx_engine.js`, the DOI insertion logic only checked `v.doi` (which was `undefined`), failing to check `v.recovered_doi` or `parsedData.references[i].doi`. As a result, discovered DOIs were never inserted into the bibliography entries.
+  2. In both Python and JS document generators, appending runs directly to `<w:p>` risked inserting content after `<w:sectPr>`, violating ISO/IEC 29500-1 schema rules.
+  3. In the web interface, `renderAuditTable()` was deferred until all 40+ references finished validation, giving the appearance that the audit was not displaying.
+  4. The generated Word document deliverables lacked a dedicated reference audit section for reviewers.
+- **Decision & Implementation**:
+  1. Populated both `doi` and `recovered_doi` across all `validateReferenceCrossref` return paths in `static/js/crossref_audit.js`.
+  2. In `static/js/docx_engine.js` and `server/linker.py`, resolved candidate DOI from `v.recovered_doi || v.doi || matchedRef?.doi`, checked text containment case-insensitively, and safely inserted the DOI before any `<w:sectPr>`.
+  3. Implemented `append_audit_ledger_to_docx` (Python) and `appendAuditLedgerToDocx` (JS), creating a professional 5-column "Co-Scientist Reference Audit & Reachability Ledger" table (`#3A0F34` header shading, `<w:tblGrid>` schema compliance) at the end of output Word documents.
+  4. Implemented instant initial table rendering and progressive real-time row updates in `static/js/app.js`, giving immediate feedback with status badges and recovery pills.
+  5. Added an interactive "View Full Audit Report" modal in `index.html` with clipboard copy and print/PDF formatting.
+- **Verification**: Verified via `test_40_missing_doi_insertion_in_tracked_docx`, `test_41_in_document_audit_table_generation` (41/41 unit tests pass), and headless Chrome CDP live test (`test_browser_audit_and_doi_recovery.py`) confirming real-time UI recovery, modal display, and valid XML insertion of recovered DOI and audit table.
+
 
 

@@ -1044,6 +1044,110 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(len(sites), 1, "Only the authentic citation (1) should be captured")
         self.assertEqual(sites[0].sentence, "Recent genomic guidelines recommend screening (1).")
 
+    def test_40_missing_doi_insertion_in_tracked_docx(self):
+        """Verifies that when a reference lacks a DOI, the recovered DOI is inserted into the Word XML as a <w:ins> element."""
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from server.models import ValidationVerdict
+
+        doc = docx.Document()
+        doc.add_paragraph("Novel vascular phenotypes are reported (1).")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Alpha A, Beta B. Genomic profiling of arteriopathies. Nat Genet. 2020;52(4):300-310.")
+
+        in_buf = BytesIO()
+        doc.save(in_buf)
+        in_buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_buf, citation_format="paren")
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].doi, "")
+
+        verdicts = {
+            1: ValidationVerdict(
+                ref_num=1,
+                status="recovered",
+                is_reachable=True,
+                is_recovered_doi=True,
+                recovered_doi="10.1038/s41588-020-0001-x",
+                resolved_url="https://doi.org/10.1038/s41588-020-0001-x"
+            )
+        }
+
+        out_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            verdicts=verdicts,
+            output_target=out_buf,
+            renumber_ama=True,
+            track_changes=True,
+            author="Co-Scientist"
+        )
+        out_buf.seek(0)
+
+        out_doc = docx.Document(out_buf)
+        ref_para = [p for p in out_doc.paragraphs if "Alpha A" in p.text][0]
+        ins_nodes = ref_para._p.findall(qn('w:ins'))
+        self.assertGreaterEqual(len(ins_nodes), 1)
+        xml_str = ref_para._p.xml
+        self.assertIn("10.1038/s41588-020-0001-x", xml_str)
+        self.assertIn("w:ins", xml_str)
+
+    def test_41_in_document_audit_table_generation(self):
+        """Verifies that the Co-Scientist Reference Audit & Reachability Ledger table is generated at the end of the manuscript."""
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from server.models import ValidationVerdict
+
+        doc = docx.Document()
+        doc.add_paragraph("Initial diagnostic cohorts demonstrate high fidelity (1, 2).")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Smith J. Diagnostic AI. Radiology 2020. doi: 10.1148/radiol.20200001")
+        doc.add_paragraph("2. Jones M. Multi-reader validation. Nature 2021.")
+
+        in_buf = BytesIO()
+        doc.save(in_buf)
+        in_buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_buf, citation_format="paren")
+        verdicts = {
+            1: ValidationVerdict(ref_num=1, status="verified", is_reachable=True, doi="10.1148/radiol.20200001"),
+            2: ValidationVerdict(ref_num=2, status="recovered", is_reachable=True, is_recovered_doi=True, recovered_doi="10.1038/s41586-021-0001-y")
+        }
+
+        out_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            verdicts=verdicts,
+            output_target=out_buf,
+            renumber_ama=True,
+            track_changes=False,
+            include_audit_ledger=True
+        )
+        out_buf.seek(0)
+
+        out_doc = docx.Document(out_buf)
+        # Verify ledger heading exists
+        heading_found = any("Co-Scientist Reference Audit & Reachability Ledger" in p.text for p in out_doc.paragraphs)
+        self.assertTrue(heading_found, "Ledger heading must be present in output document")
+
+        # Verify audit table exists and has 5 columns
+        self.assertGreaterEqual(len(out_doc.tables), 1, "Must contain at least 1 table (the audit ledger)")
+        audit_table = out_doc.tables[-1]
+        self.assertEqual(len(audit_table.columns), 5, "Audit table must have 5 columns")
+        headers = [c.text.strip() for c in audit_table.rows[0].cells]
+        self.assertEqual(headers, ["#", "Bibliographic Record", "DOI Identifier", "Audit Status", "Citations"])
+
+        # Verify data rows
+        self.assertEqual(len(audit_table.rows), 3, "Header + 2 reference rows")
+        row1_text = " ".join(c.text for c in audit_table.rows[1].cells)
+        row2_text = " ".join(c.text for c in audit_table.rows[2].cells)
+        self.assertIn("10.1148/radiol.20200001", row1_text)
+        self.assertIn("10.1038/s41586-021-0001-y", row2_text)
+        self.assertIn("DOI Recovered", row2_text)
+
 if __name__ == "__main__":
     unittest.main()
 
