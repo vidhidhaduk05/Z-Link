@@ -18,11 +18,18 @@ const YEAR_REGEX = /\b(19\d\d|20\d\d)\b/;
 
 const EXPONENT_CHARS = new Set(['R', 'r', 'χ', 'τ', 'I', 'β', 't', 'f', 'z', 'p']);
 const EXPONENT_WORDS = ['cm', 'mm', 'nm', 'um', 'µm', 'km', 'm', 'kg', 'mg', 'g', 'ml', 'dl', 'mol', 'chi', 'tau', 'beta', 'st', 'nd', 'rd', 'th'];
-const CLASSIFICATION_NOUNS = /\b(case|stage|grade|type|group|cohort|sample|patient|day|step|table|fig|figure|equation|eq|formula|model)\s*$/i;
+const NON_CITATION_PRECEDING_WORDS = /\b(patients?|cases?|cohorts?|subjects?|participants?|controls?|individuals?|males?|females?|men|women|children|adults?|infants?|volunteers?|records?|years?|year-old|aged?|months?|weeks?|days?|hours?|y\/o|yo|n|N|IQR|range|mean|median|SD|SEM|CI|total|subgroups?|proportions?|rates?|counts?|dose|doses|mg|g|ml|mcg|table|fig|figure|equation|eq|formula|model|item|point|rule|part|grade|stage|type|class|step)\s*$/i;
+const CLASSIFICATION_NOUNS = NON_CITATION_PRECEDING_WORDS;
 const CLINICAL_SCALE_REGEX = /\b(graded\s+(?:on|as|by)?|scores?|scales?|grades?|grading|stages?|staging|classes?|indices?|index|points?|severity|levels?|subscores?|criteria|systems?|angiography|perfusion|tomography|mRS|NIHSS|GCS|mTICI|TICI|TIMI|ASPECTS|DSA)\b/i;
 const ENUMERATED_LIST_START = /^\s*\((?:\d{1,2})\)\s+[A-Z]/;
 
-function isLikelyReferenceLine(line) {
+const NON_CITATION_INNER_CONTENT = /(?:%\s*$|\b(?:IQR|range|mean|median|SD|SEM|CI|vs|versus)\b|^[nN]\s*=\s*\d+|\b\d+\s*patients?\b|^\d+\s*,\s*\d+(?:\.\d+)?\s*%|^(?:19\d\d|20\d\d)(?:\s*[-–]\s*(?:19\d\d|20\d\d))?$)/i;
+
+const CLINICAL_STATEMENT_REGEX = /\b(patients?|cases?|cohorts?|subjects?|participants?|controls?|individuals?|were\s+enrolled|underwent|were\s+treated|were\s+evaluated|were\s+included|were\s+admitted|mean\s+age|median\s+age|years?\s+old|inclusion\s+criteria|exclusion\s+criteria|follow-up|in\s+our\s+study|in\s+this\s+study|our\s+cohort|adverse\s+events?|hazard\s+ratio|odds\s+ratio|confidence\s+interval|p\s*[<=]\s*0?\.\d+)\b/i;
+const BIBLIO_JOURNAL_PAGINATION_REGEX = /\b(19\d\d|20\d\d)\s*;\s*\d+(?:\s*\([^)]+\))?\s*:\s*[0-9eE\-–]+/;
+const BIBLIO_CONTAINERS_REGEX = /\b(et\s+al|doi:|https?:\/\/|PMID:|vol\.|volume|issue|pp\.|pages|press|publisher|springer|elsevier|wiley|oxford|cambridge|academic\s+press|in:\s+[A-Z][a-z]+)\b/i;
+
+function isAuthenticBibliographicReference(line) {
   const clean = (line || "").trim();
   if (!clean) return false;
   if (/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+/i.test(clean) ||
@@ -30,11 +37,21 @@ function isLikelyReferenceLine(line) {
       /PMID:\s*\d{6,9}/i.test(clean)) {
     return true;
   }
-  if (YEAR_REGEX.test(clean)) return true;
-  if (clean.toLowerCase().includes('et al') || clean.includes(';') || clean.includes(':')) return true;
-  const words = clean.split(/\s+/);
-  if (words.length <= 6) return false;
-  return true;
+  if (BIBLIO_JOURNAL_PAGINATION_REGEX.test(clean)) return true;
+  if (CLINICAL_STATEMENT_REGEX.test(clean)) {
+    if (!(BIBLIO_CONTAINERS_REGEX.test(clean) && YEAR_REGEX.test(clean))) {
+      return false;
+    }
+  }
+  if (BIBLIO_CONTAINERS_REGEX.test(clean) && YEAR_REGEX.test(clean)) return true;
+  if (YEAR_REGEX.test(clean) && (clean.includes(';') || clean.includes(':')) && (clean.toLowerCase().includes('et al') || clean.split(/\s+/).length >= 8)) {
+    return true;
+  }
+  return false;
+}
+
+function isLikelyReferenceLine(line) {
+  return isAuthenticBibliographicReference(line);
 }
 
 function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
@@ -71,24 +88,32 @@ function profileDocumentCitationFormat(paragraphs, paraTexts, scanEnd) {
     if (!pText.trim()) continue;
 
     // Brackets
-    const bMatches = pText.match(BRACKET_REGEX) || [];
-    bMatches.forEach(b => {
-      const inner = b.slice(1, -1).replace(/–/g, '-');
+    const bMatches = pText.matchAll(new RegExp(BRACKET_REGEX));
+    for (const bm of bMatches) {
+      const prior = pText.slice(0, bm.index).trim();
+      if (NON_CITATION_PRECEDING_WORDS.test(prior) || CLINICAL_SCALE_REGEX.test(prior.slice(-60))) continue;
+      if (NON_CITATION_INNER_CONTENT.test(bm[0].slice(1, -1))) continue;
+      const inner = bm[1].replace(/–/g, '-');
       const parts = inner.split(/\s*,\s*/).filter(Boolean);
       if (parts.length > 0 && parts.every(p => /^\d{1,3}(?:-\d{1,3})?$/.test(p))) {
+        if (parts.some(pt => parseInt(pt.split('-')[0], 10) >= 1900)) continue;
         bracketCount++;
       }
-    });
+    }
 
     // Parens (applying clinical scale guards)
-    const pMatches = pText.match(PAREN_REGEX) || [];
-    pMatches.forEach(pm => {
-      const inner = pm.slice(1, -1).replace(/–/g, '-');
+    const pMatches = pText.matchAll(new RegExp(PAREN_REGEX));
+    for (const pm of pMatches) {
+      const prior = pText.slice(0, pm.index).trim();
+      if (NON_CITATION_PRECEDING_WORDS.test(prior) || CLINICAL_SCALE_REGEX.test(prior.slice(-60))) continue;
+      if (NON_CITATION_INNER_CONTENT.test(pm[0].slice(1, -1))) continue;
+      const inner = pm[1].replace(/–/g, '-');
       const parts = inner.split(/\s*,\s*/).filter(Boolean);
       if (parts.length > 0 && parts.every(p => /^\d{1,3}(?:-\d{1,3})?$/.test(p))) {
+        if (parts.some(pt => parseInt(pt.split('-')[0], 10) >= 1900)) continue;
         parenCount++;
       }
-    });
+    }
   }
 
   // Dominant format determination
@@ -146,9 +171,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
   
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(docXmlStr, "application/xml");
-  if (hasTrackedRevisions(xmlDoc)) {
-    acceptPriorRevisions(xmlDoc);
-  }
+  // Non-destructive: preserve existing reviewer revisions without accepting them
   const paragraphs = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
 
   const paraTexts = paragraphs.map(p => {
@@ -181,7 +204,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
     if (m) {
       const refNum = parseInt(m[1], 10);
       const content = m[2];
-      if (isLikelyReferenceLine(content) || (i + 1 < paraTexts.length && (REF_START_REGEX.test(paraTexts[i+1].trim()) || /(?:https?:\/\/|doi:)/i.test(paraTexts[i+1])))) {
+      if (isLikelyReferenceLine(content) || (i + 1 < paraTexts.length && (REF_START_REGEX.test(paraTexts[i+1].trim()) && isLikelyReferenceLine(paraTexts[i+1].trim())))) {
         const doiM = content.match(/(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)/i) ||
                      content.match(/\b(10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+)\b/);
         const doi = doiM ? doiM[1].replace(/[.,;)]+$/, '') : "";
@@ -242,7 +265,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
     const pText = paraTexts[pi];
     if (!pText.trim()) continue;
 
-    const runs = Array.from(pEl.getElementsByTagNameNS(W_NS, "r"));
+    const runs = Array.from(pEl.getElementsByTagNameNS(W_NS, "r")).filter(r => !r.closest("w\\:del, del"));
     let combinedPrev = "";
 
     for (let ri = 0; ri < runs.length; ri++) {
@@ -280,7 +303,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
         const isExpChar = EXPONENT_CHARS.has(prevChar) && ['2', '3', '4'].includes(rText);
 
         if (prevChar && !/\d/.test(prevChar) && !isExpChar && !isExpWord) {
-          if (Math.max(...nums) <= maxRefNum) {
+          if (nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
@@ -299,6 +322,14 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
         let bMatch;
         const bracketRe = new RegExp(BRACKET_REGEX);
         while ((bMatch = bracketRe.exec(rText)) !== null) {
+          const contextPrior = (combinedPrev + rText.slice(0, bMatch.index)).trim();
+          if (NON_CITATION_PRECEDING_WORDS.test(contextPrior) || CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
+            continue;
+          }
+          if (NON_CITATION_INNER_CONTENT.test(bMatch[0].slice(1, -1))) {
+            continue;
+          }
+
           const inner = bMatch[1].replace(/–/g, '-');
           const nums = [];
           inner.split(/\s*,\s*/).forEach(part => {
@@ -315,7 +346,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
             }
           });
 
-          if (nums.length > 0 && Math.max(...nums) <= maxRefNum) {
+          if (nums.length > 0 && nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
@@ -336,12 +367,12 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
         let match;
         const parenRe = new RegExp(PAREN_REGEX);
         while ((match = parenRe.exec(rText)) !== null) {
-          // Check classification nouns and clinical scale lookbehind
+          // Check clinical nouns and clinical scale lookbehind
           const contextPrior = (combinedPrev + rText.slice(0, match.index)).trim();
-          if (CLASSIFICATION_NOUNS.test(contextPrior)) {
+          if (NON_CITATION_PRECEDING_WORDS.test(contextPrior) || CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
             continue;
           }
-          if (CLINICAL_SCALE_REGEX.test(contextPrior.slice(-60))) {
+          if (NON_CITATION_INNER_CONTENT.test(match[0].slice(1, -1))) {
             continue;
           }
           // Check enumerated list start
@@ -381,7 +412,7 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
             continue;
           }
 
-          if (nums.length > 0 && Math.max(...nums) <= maxRefNum) {
+          if (nums.every(n => n < 1900) && Math.max(...nums) <= maxRefNum) {
             sites.push({
               paragraph_idx: pi,
               run_idx: ri,
@@ -396,6 +427,9 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
           }
         }
       }
+      combinedPrev += rText;
+    }
+  }
       combinedPrev += rText;
     }
   }

@@ -134,9 +134,20 @@ def convert_paren_site(
     p, run_idx: int, match_start: int, match_end: int,
     formatted_text: Optional[str] = None,
     track_changes: bool = False,
-    tracker: Optional[RevisionTracker] = None
+    tracker: Optional[RevisionTracker] = None,
+    model_run=None
 ):
-    r = p.runs[run_idx]
+    if model_run is not None:
+        r = model_run
+    else:
+        active_runs = [docx.text.run.Run(r_el, p) for r_el in p._p.xpath('.//w:r[not(ancestor::w:del)]')]
+        if run_idx < len(active_runs):
+            r = active_runs[run_idx]
+        elif run_idx < len(p.runs):
+            r = p.runs[run_idx]
+        else:
+            return None
+
     text = r.text
     before, cited, after = text[:match_start], text[match_start:match_end], text[match_end:]
     if before.endswith(' '):
@@ -151,11 +162,31 @@ def convert_paren_site(
     if track_changes and tracker:
         del_el = make_del_element(cited, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
         ins_el = make_ins_element(sup_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=r)
-        r._r.addnext(del_el)
-        del_el.addnext(ins_el)
-        if after:
-            ins_el.addnext(make_text_run(r, after))
-        return ins_el
+        
+        parent = r._r.getparent()
+        if parent is not None and parent.tag == qn('w:ins'):
+            p_el = parent.getparent()
+            ins_idx = p_el.index(parent)
+            after_runs = list(parent)[parent.index(r._r)+1:]
+            if after_runs:
+                ins_after = copy.deepcopy(parent)
+                for c in list(ins_after):
+                    ins_after.remove(c)
+                for ar in after_runs:
+                    parent.remove(ar)
+                    ins_after.append(ar)
+                p_el.insert(ins_idx + 1, ins_after)
+            p_el.insert(ins_idx + 1, ins_el)
+            p_el.insert(ins_idx + 1, del_el)
+            if after:
+                ins_el.addnext(make_text_run(r, after))
+            return ins_el
+        else:
+            r._r.addnext(del_el)
+            del_el.addnext(ins_el)
+            if after:
+                ins_el.addnext(make_text_run(r, after))
+            return ins_el
     else:
         sup_r = make_sup_run(r, sup_text)
         r._r.addnext(sup_r)
@@ -280,8 +311,10 @@ def find_reference_section_bounds(doc) -> Tuple[Optional[int], int, int]:
             txt = p.text.strip()
             m = REF_START_RE.match(txt)
             if m and int(m.group(1)) == 1:
-                start_idx = i
-                break
+                from server.parser import is_authentic_bibliographic_reference
+                if is_authentic_bibliographic_reference(m.group(2)):
+                    start_idx = i
+                    break
 
     if start_idx is None:
         return None, 0, len(doc.paragraphs)
@@ -410,9 +443,6 @@ def link_docx_manuscript(
     tags attributed to author, enabling Word's revision tracking mode.
     """
     doc = docx.Document(docx_input)
-    from server.parser import has_tracked_revisions, accept_prior_revisions
-    if has_tracked_revisions(doc):
-        accept_prior_revisions(doc)
     ref_by_num = {r.ref_num: r for r in references}
     tracker = RevisionTracker(author=author) if track_changes else None
 
@@ -447,27 +477,48 @@ def link_docx_manuscript(
         new_site_nums = sorted(list(set(mapping.get(n, n) for n in s.nums)))
         condensed_str = format_condensed_citation(new_site_nums)
 
+        active_runs = [docx.text.run.Run(r_el, p) for r_el in p._p.xpath('.//w:r[not(ancestor::w:del)]')]
         if s.kind in ('paren', 'bracket') and s.match_start is not None and s.match_end is not None:
-            if s.run_idx < len(p.runs):
+            if s.run_idx < len(active_runs):
                 sup_el = convert_paren_site(
                     p, s.run_idx, s.match_start, s.match_end,
                     formatted_text=condensed_str,
                     track_changes=track_changes,
-                    tracker=tracker
+                    tracker=tracker,
+                    model_run=active_runs[s.run_idx]
                 )
             else:
                 continue
-        elif s.run_idx < len(p.runs):
-            sup_run = p.runs[s.run_idx]
+        elif s.run_idx < len(active_runs):
+            sup_run = active_runs[s.run_idx]
             if track_changes and tracker:
                 old_text = sup_run.text
                 if old_text != condensed_str:
                     del_el = make_del_element(old_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=sup_run)
                     ins_el = make_ins_element(condensed_str, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=sup_run)
-                    sup_run._r.addnext(del_el)
-                    del_el.addnext(ins_el)
-                    sup_run.text = ""
-                    sup_el = ins_el
+                    
+                    parent = sup_run._r.getparent()
+                    if parent is not None and parent.tag == qn('w:ins'):
+                        p_el = parent.getparent()
+                        ins_idx = p_el.index(parent)
+                        after_runs = list(parent)[parent.index(sup_run._r)+1:]
+                        if after_runs:
+                            ins_after = copy.deepcopy(parent)
+                            for c in list(ins_after):
+                                ins_after.remove(c)
+                            for ar in after_runs:
+                                parent.remove(ar)
+                                ins_after.append(ar)
+                            p_el.insert(ins_idx + 1, ins_after)
+                        parent.remove(sup_run._r)
+                        p_el.insert(ins_idx + 1, ins_el)
+                        p_el.insert(ins_idx + 1, del_el)
+                        sup_el = ins_el
+                    else:
+                        sup_run._r.addnext(del_el)
+                        del_el.addnext(ins_el)
+                        sup_run.text = ""
+                        sup_el = ins_el
                 else:
                     sup_el = sup_run._r
             else:

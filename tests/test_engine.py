@@ -7,10 +7,12 @@ import unittest
 import docx
 import re
 from io import BytesIO
+from lxml import etree
+from docx.oxml.ns import qn
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from server.parser import parse_docx_manuscript
+from server.parser import parse_docx_manuscript, parse_paragraphs_list
 from server.validator import validate_single_reference, map_usage_and_sequence
 from server.ris_generator import generate_ris
 from server.linker import link_docx_manuscript
@@ -938,6 +940,109 @@ class TestZoteroLinkEngine(unittest.TestCase):
 
         job.transition_to(JobStatus.READY)
         self.assertEqual(job.status, JobStatus.READY)
+
+    def test_36_preserve_existing_tracked_changes_without_accepting(self):
+        """Verifies that pre-existing tracked changes are preserved and new revisions are added on top."""
+        doc = docx.Document()
+        p = doc.add_paragraph("Background statement. ")
+        # Reviewer 1 inserted text
+        ins = etree.SubElement(p._p, qn('w:ins'), {qn('w:id'): '10', qn('w:author'): 'Reviewer 1'})
+        r_ins = etree.SubElement(ins, qn('w:r'))
+        etree.SubElement(r_ins, qn('w:t')).text = "Reviewer added clause."
+        
+        # Reviewer 1 deleted text
+        del_el = etree.SubElement(p._p, qn('w:del'), {qn('w:id'): '11', qn('w:author'): 'Reviewer 1'})
+        r_del = etree.SubElement(del_el, qn('w:r'))
+        etree.SubElement(r_del, qn('w:delText')).text = "Obsolete clause."
+
+        p.add_run(" Final sentence with citation (1).")
+
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Alpha A. Original Finding. Lancet 2020.")
+
+        buf = BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+
+        # Parse without accepting revisions
+        paras, sites, refs = parse_docx_manuscript(buf, citation_format="paren", accept_revisions=False)
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(len(sites), 1)
+
+        # Link document with track_changes=True (author='Co-Scientist')
+        buf.seek(0)
+        out_buf = BytesIO()
+        link_docx_manuscript(buf, sites, refs, output_target=out_buf, track_changes=True, author="Co-Scientist")
+        out_buf.seek(0)
+
+        out_doc = docx.Document(out_buf)
+        body = out_doc._body._element
+
+        # Verify Reviewer 1 insertions and deletions are STILL IN THE DOCUMENT
+        reviewer_inss = body.xpath('.//w:ins[@w:author="Reviewer 1"]')
+        reviewer_dels = body.xpath('.//w:del[@w:author="Reviewer 1"]')
+        self.assertGreaterEqual(len(reviewer_inss), 1, "Reviewer 1 insertion must not be accepted or removed")
+        self.assertGreaterEqual(len(reviewer_dels), 1, "Reviewer 1 deletion must not be accepted or removed")
+
+        # Verify Co-Scientist additions are layered on top
+        co_inss = body.xpath('.//w:ins[@w:author="Co-Scientist"]')
+        co_dels = body.xpath('.//w:del[@w:author="Co-Scientist"]')
+        self.assertGreaterEqual(len(co_inss), 1, "Co-Scientist insertion must be present")
+        self.assertGreaterEqual(len(co_dels), 1, "Co-Scientist deletion must be present")
+
+    def test_37_clinical_patient_count_statement_rejection(self):
+        """Verifies that numbered clinical patient count statements are never parsed as references."""
+        lines = [
+            "METHODS",
+            "1. A total of 60 patients were enrolled between 2018 and 2022.",
+            "2. Patients were aged 18 to 65 years in the 2020 cohort.",
+            "3. Thirty-eight patients (63.3%) had initial presentation of ischemic stroke.",
+            "4. Mean follow-up was 3.5 years in 2021.",
+            "REFERENCES",
+            "1. Smith J, Doe A. Treatment of Cerebrovascular Disease. Stroke 2021; 52: 100-105.",
+            "2. Johnson K. Vascular Genetics. Nature 2022."
+        ]
+        paras, sites, refs = parse_paragraphs_list(lines, citation_format="paren")
+        self.assertEqual(len(refs), 2, "Only authentic references must be captured")
+        self.assertEqual(refs[0].authors, ["Smith J", "Doe A"])
+        self.assertEqual(refs[1].title, "Vascular Genetics")
+
+    def test_38_in_text_patient_count_paren_rejection(self):
+        """Verifies that patient count and percentage parentheticals are never parsed as citations."""
+        lines = [
+            "INTRODUCTION",
+            "The disease causes significant mortality (1).",
+            "RESULTS",
+            "In this study, 45 patients (12) were female and 33 were male.",
+            "Initial presentation was ischemic stroke in 38 patients (38, 63.3%).",
+            "Antithrombotic therapy was reported almost exclusively as antiplatelet (25; anticoagulation in 1).",
+            "Demographics of the cohort (n = 60) showed high penetrance.",
+            "REFERENCES",
+            "1. Smith J. Cerebrovascular Disease. Lancet 2020."
+        ]
+        paras, sites, refs = parse_paragraphs_list(lines, citation_format="paren")
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(len(sites), 1, "Only the real citation (1) in introduction should be captured")
+        self.assertEqual(sites[0].sentence, "The disease causes significant mortality (1).")
+
+    def test_39_in_text_age_and_year_range_rejection(self):
+        """Verifies that age ranges, calendar year ranges, and duration intervals are rejected."""
+        lines = [
+            "INTRODUCTION",
+            "Recent genomic guidelines recommend screening (1).",
+            "METHODS",
+            "Median age at index imaging was 7.0 years (3-14).",
+            "Patients had a mean follow-up of 5 years (1-8).",
+            "Duration of symptoms was 6 months (1-12).",
+            "Data was collected over the entire study period (2018-2022).",
+            "Evaluations performed in (2020) confirmed findings.",
+            "REFERENCES",
+            "1. Doe A. Clinical Guidelines. NEJM 2021."
+        ]
+        paras, sites, refs = parse_paragraphs_list(lines, citation_format="paren")
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(len(sites), 1, "Only the authentic citation (1) should be captured")
+        self.assertEqual(sites[0].sentence, "Recent genomic guidelines recommend screening (1).")
 
 if __name__ == "__main__":
     unittest.main()

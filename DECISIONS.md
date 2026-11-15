@@ -138,3 +138,28 @@
   4. Updated all download endpoints (`/api/download/{job_id}/docx`, `/api/download/{job_id}/tracked_docx`, `/api/download/{job_id}/ris`, `/api/download/{job_id}/report`) to enforce guarded transitions and guarantee deterministic error responses.
 - **Verification**: Verified via `test_35_guarded_job_state_machine` and end-to-end integration API audit across all 6 REST endpoints (35/35 tests passing).
 
+### [2026-11-15 12:05] ARCH-DECISION-013: Non-Destructive Multi-Author Tracked Changes ("Add On It Always")
+- **Context**: User instructed: *"it shoukld not accepted the tracked chnages it should add on it always"*.
+- **Root Cause & Technical Constraints**:
+  1. Previously, `accept_prior_revisions` stripped existing `<w:del>` elements and promoted `<w:ins>` elements to avoid nested revisions, which permanently destroyed co-author / reviewer markup.
+  2. The system must leave all prior reviewer revisions 100% intact in the output file, while adding Co-Scientist revisions alongside them.
+- **Decision & Implementation**:
+  1. Disabled automatic acceptance of prior revisions in `server/parser.py`, `server/linker.py`, and `static/js/docx_engine.js`.
+  2. Implemented active-text XPath extraction (`.//w:t[not(ancestor::w:del)]`) so active reviewer insertions are parsed for citations while deleted text is ignored, without mutating or removing any DOM nodes.
+  3. Implemented ISO/IEC 29500-1 non-nested revision splicing: when modifying a run inside a prior reviewer's `<w:ins>`, the parent insertion is cleanly spliced into sibling elements at the `<w:p>` level, preserving reviewer attribution while preventing invalid nested `<w:ins><w:ins>` elements.
+- **Verification**: Verified via `test_36_preserve_existing_tracked_changes_without_accepting` (39/39 tests passing).
+
+### [2026-11-15 12:10] ARCH-DECISION-014: High-Precision Discrimination of Patient Counts & Calendar Years
+- **Context**: User instructed: *"it is also wrongly identifing patient counts and year numbers as refrences let's fix it first plan and then do it"*.
+- **Root Cause & Technical Constraints**:
+  1. In the reference list parser, any numbered paragraph containing a 4-digit year (e.g. `"1. A total of 60 patients were enrolled in 2020."`) was falsely treated as a reference.
+  2. In-text citation parsers lacked plural clinical nouns (`patients`, `cases`, `cohorts`, `subjects`), temporal units (`years`, `months`, `weeks`, `days`, `age`), and statistical tokens (`IQR`, `range`, `n =`, `%`).
+  3. Temporal ranges like `"median age was 7.0 years (3-14)"` or `"follow-up of 5 years (1-8)"` were mistakenly expanded into reference ranges [3..14] and [1..8].
+  4. Calendar year parentheticals like `"(2020)"` or `"(2018-2022)"` were not filtered out.
+- **Decision & Implementation**:
+  1. Implemented `is_authentic_bibliographic_reference` with `CLINICAL_STATEMENT_RE` gating: clinical sentences containing patient/enrollment/age markers are rejected unless verified by positive bibliographic metadata.
+  2. Implemented `NON_CITATION_PRECEDING_WORDS` and `NON_CITATION_INNER_CONTENT` filters in both Python and JavaScript engines to reject patient counts (`patients (12)`), percentages (`(38, 63.3%)`), and duration ranges (`years (1-8)`).
+  3. Enforced a calendar year invariant: any parenthetical/bracket number $\ge 1900$ is recognized as a calendar year and excluded from citation indexing.
+- **Verification**: Verified via `test_37_clinical_patient_count_statement_rejection`, `test_38_in_text_patient_count_paren_rejection`, `test_39_in_text_age_and_year_range_rejection`, and tested against real-world `ACTA2_Manuscript_11.14.2026.docx` (all 39 tests passing with 0 false-positive citation sites).
+
+
