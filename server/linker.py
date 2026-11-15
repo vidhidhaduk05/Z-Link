@@ -11,7 +11,7 @@ from io import BytesIO
 from typing import List, Dict, Optional, Union, Tuple, Any
 import docx
 from docx.shared import Pt, Inches, RGBColor
-from docx.oxml import parse_xml
+from docx.oxml import parse_xml, OxmlElement
 from docx.oxml.ns import nsdecls, qn
 from lxml import etree
 from server.models import CitationSite, ReferenceEntry, ValidationVerdict
@@ -359,20 +359,95 @@ def extract_atomic_reference_blocks(
 
     return blocks
 
-def inject_bibliography_field(doc, target_para=None, *args, **kwargs):
+def strip_existing_bibliography_fields(doc):
     """
-    Injects a self-contained ADDIN ZOTERO_BIBL field marker.
-    Attaches cleanly to target_para (e.g. REFERENCES header) without wrapping
-    or swallowing reference paragraphs, preventing Word from blanking out the bibliography.
+    Safely strips pre-existing ADDIN ZOTERO_BIBL field codes (begin, instr, separate, and associated end)
+    so re-injecting does not create nested, duplicated, or corrupted field markers.
+    """
+    bibl_found = False
+    for p in doc.paragraphs:
+        p_el = p._p
+        instrs = p_el.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')
+        if instrs:
+            bibl_found = True
+            runs_to_remove = set()
+            for it in instrs:
+                r = it.getparent()
+                if r is not None and r.tag == qn('w:r'):
+                    runs_to_remove.add(r)
+                    prev = r.getprevious()
+                    while prev is not None:
+                        if prev.tag == qn('w:r') and prev.xpath('.//w:fldChar[@w:fldCharType="begin"]'):
+                            runs_to_remove.add(prev)
+                            break
+                        prev = prev.getprevious()
+                    nxt = r.getnext()
+                    while nxt is not None:
+                        if nxt.tag == qn('w:r') and nxt.xpath('.//w:fldChar[@w:fldCharType="separate"]'):
+                            runs_to_remove.add(nxt)
+                            sub_nxt = nxt.getnext()
+                            while sub_nxt is not None:
+                                if sub_nxt.tag == qn('w:r') and sub_nxt.xpath('.//w:fldChar[@w:fldCharType="end"]'):
+                                    runs_to_remove.add(sub_nxt)
+                                    break
+                                sub_nxt = sub_nxt.getnext()
+                            break
+                        elif nxt.tag == qn('w:r') and nxt.xpath('.//w:fldChar[@w:fldCharType="end"]'):
+                            runs_to_remove.add(nxt)
+                            break
+                        nxt = nxt.getnext()
+
+            for r in runs_to_remove:
+                parent = r.getparent()
+                if parent is not None:
+                    parent.remove(r)
+
+    if bibl_found:
+        for p in doc.paragraphs:
+            p_el = p._p
+            if not p.text.strip():
+                end_chars = p_el.xpath('.//w:fldChar[@w:fldCharType="end"]')
+                if end_chars:
+                    for ec in end_chars:
+                        r = ec.getparent()
+                        if r is not None and r.getparent() is not None:
+                            r.getparent().remove(r)
+
+def inject_bibliography_field(doc, target_para=None, last_para=None, *args, **kwargs):
+    """
+    Authentically injects multi-paragraph ADDIN ZOTERO_BIBL field codes enclosing the reference list.
+    1. Header paragraph receives: begin, instrText, separate
+    2. Reference entries reside inside the field
+    3. Trailing paragraph receives: end
     """
     if target_para is None and len(doc.paragraphs) > 0:
         target_para = doc.paragraphs[-1]
     if target_para is None:
         return
-    instr = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY'
+
+    strip_existing_bibliography_fields(doc)
+
+    instr = ' ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBL {"schema":"https://github.com/citation-style-language/schema/raw/master/csl-bibliography.json","bibliography":{"formattedCitation":"","uncited":[],"omitted":[],"custom":[]}} '
     p = target_para._p
-    for e in (fld_run('begin'), fld_run('instr', instr), fld_run('separate'), fld_run('end')):
-        p.append(e)
+    p.append(fld_run('begin'))
+    p.append(fld_run('instr', instr))
+    p.append(fld_run('separate'))
+
+    if last_para is not None:
+        next_p = last_para._p.getnext()
+        if next_p is not None and next_p.tag == qn('w:p') and not ''.join(next_p.itertext()).strip():
+            next_p.append(fld_run('end'))
+        else:
+            # Place end at the end of last_para (before sectPr if present)
+            last_p_el = last_para._p
+            sect_pr = last_p_el.find(qn('w:sectPr'))
+            end_r = fld_run('end')
+            if sect_pr is not None:
+                sect_pr.addprevious(end_r)
+            else:
+                last_p_el.append(end_r)
+    else:
+        p.append(fld_run('end'))
 
 def inject_doc_prefs(doc, style_id=DEFAULT_STYLE, style_name=DEFAULT_STYLE_NAME, library_id=1):
     prefs = {
@@ -795,12 +870,18 @@ def link_docx_manuscript(
                         for sub_idx, bp in enumerate(b.paragraphs):
                             parent.insert(idx + sub_idx, bp._p)
 
-        # Inject self-contained bibliography field marker on REFERENCES header
-        if not track_changes:
-            if header_idx is not None and header_idx < len(doc.paragraphs):
-                inject_bibliography_field(doc, doc.paragraphs[header_idx])
-            elif blocks:
-                inject_bibliography_field(doc, blocks[0].primary_para)
+        # Inject authentic multi-paragraph bibliography field enclosing all reference blocks
+        # Active in BOTH clean mode and track_changes mode
+        last_ref_para = None
+        if renumber_ama and len(blocks) > 1:
+            last_ref_para = sorted_blocks[-1].paragraphs[-1]
+        elif blocks:
+            last_ref_para = blocks[-1].paragraphs[-1]
+
+        if header_idx is not None and header_idx < len(doc.paragraphs):
+            inject_bibliography_field(doc, doc.paragraphs[header_idx], last_para=last_ref_para)
+        elif blocks:
+            inject_bibliography_field(doc, blocks[0].primary_para, last_para=last_ref_para)
 
     # Append Co-Scientist Reference Audit & Reachability Ledger
     if include_audit_ledger and references:

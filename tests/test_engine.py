@@ -1148,6 +1148,84 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIn("10.1038/s41586-021-0001-y", row2_text)
         self.assertIn("DOI Recovered", row2_text)
 
+    def test_42_zotero_bibliography_field_enclosure(self):
+        """
+        Verifies authentic multi-paragraph ADDIN ZOTERO_BIBL field enclosure:
+        1. REFERENCES header contains begin, CSL_BIBL, and separate, but NOT end.
+        2. All bibliography entries are located inside the field between separate and end.
+        3. Field properly encloses references in BOTH clean and tracked changes modes.
+        4. No duplicate or dangling ZOTERO_BIBL field codes exist.
+        """
+        from docx.oxml.ns import qn
+
+        # 1. Clean mode on sample radiology manuscript
+        doc_path = "sample_radiology_manuscript.docx"
+        paras, sites, refs = parse_docx_manuscript(doc_path)
+        out_buf = BytesIO()
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_buf, track_changes=False)
+        out_buf.seek(0)
+        doc_clean = docx.Document(out_buf)
+
+        # Locate bibl start paragraph
+        bibl_start_idx = None
+        for i, p in enumerate(doc_clean.paragraphs):
+            instrs = p._p.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')
+            if instrs:
+                bibl_start_idx = i
+                fc_types = [fc.get(qn('w:fldCharType')) for fc in p._p.xpath('.//w:fldChar')]
+                self.assertIn('begin', fc_types, "Header must contain begin")
+                self.assertIn('separate', fc_types, "Header must contain separate")
+                self.assertNotIn('end', fc_types, "Header must NOT contain end; field must enclose references")
+                break
+        self.assertIsNotNone(bibl_start_idx, "Must find ADDIN ZOTERO_BIBL header paragraph")
+
+        # Locate bibl end paragraph
+        bibl_end_idx = None
+        for i in range(bibl_start_idx, len(doc_clean.paragraphs)):
+            fc_types = [fc.get(qn('w:fldCharType')) for fc in doc_clean.paragraphs[i]._p.xpath('.//w:fldChar')]
+            if 'end' in fc_types:
+                bibl_end_idx = i
+                break
+        self.assertIsNotNone(bibl_end_idx, "Must find bibliography end marker")
+        self.assertGreater(bibl_end_idx, bibl_start_idx, "End marker must follow start marker")
+
+        # Verify all references are situated strictly between bibl_start_idx and bibl_end_idx (inclusive)
+        ref_count_inside = 0
+        for i in range(bibl_start_idx + 1, bibl_end_idx + 1):
+            txt = doc_clean.paragraphs[i].text.strip()
+            if re.match(r'^\d+\.', txt):
+                ref_count_inside += 1
+        self.assertEqual(ref_count_inside, len(refs), f"All {len(refs)} references must be inside the field")
+
+        # 2. Tracked Changes mode parity
+        out_tracked_buf = BytesIO()
+        link_docx_manuscript(doc_path, sites, refs, output_target=out_tracked_buf, track_changes=True)
+        out_tracked_buf.seek(0)
+        doc_tracked = docx.Document(out_tracked_buf)
+
+        tracked_bibl_start = None
+        for i, p in enumerate(doc_tracked.paragraphs):
+            instrs = p._p.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')
+            if instrs:
+                tracked_bibl_start = i
+                fc_types = [fc.get(qn('w:fldCharType')) for fc in p._p.xpath('.//w:fldChar')]
+                self.assertIn('begin', fc_types)
+                self.assertIn('separate', fc_types)
+                self.assertNotIn('end', fc_types)
+                break
+        self.assertIsNotNone(tracked_bibl_start, "Tracked document must contain ADDIN ZOTERO_BIBL field")
+
+        # 3. Verify real-world ACTA2 manuscript has zero duplicate bibl fields
+        acta2_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
+        if os.path.exists(acta2_path):
+            a_paras, a_sites, a_refs = parse_docx_manuscript(acta2_path)
+            a_out = BytesIO()
+            link_docx_manuscript(acta2_path, a_sites, a_refs, output_target=a_out, track_changes=False)
+            a_out.seek(0)
+            a_doc = docx.Document(a_out)
+            bibl_instr_count = sum(len(p._p.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')) for p in a_doc.paragraphs)
+            self.assertEqual(bibl_instr_count, 1, "Must contain exactly 1 ADDIN ZOTERO_BIBL field (no duplicates)")
+
 if __name__ == "__main__":
     unittest.main()
 

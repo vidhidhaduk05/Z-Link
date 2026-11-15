@@ -468,6 +468,86 @@ function createFieldRun(doc, type, instrText = null) {
   return r;
 }
 
+function stripExistingBibliographyFields(xmlDoc) {
+  const instrs = xmlDoc.getElementsByTagNameNS(W_NS, "instrText");
+  const runsToRemove = [];
+
+  for (let i = 0; i < instrs.length; i++) {
+    const it = instrs[i];
+    if (it.textContent && it.textContent.includes("ZOTERO_BIBL")) {
+      let r = it.parentElement;
+      while (r && r.localName !== "r" && r !== xmlDoc.documentElement) {
+        r = r.parentElement;
+      }
+      if (r && r.localName === "r") {
+        runsToRemove.push(r);
+        let prev = r.previousElementSibling;
+        while (prev) {
+          if (prev.localName === "r") {
+            const fcs = prev.getElementsByTagNameNS(W_NS, "fldChar");
+            if (fcs.length > 0 && fcs[0].getAttributeNS(W_NS, "fldCharType") === "begin") {
+              runsToRemove.push(prev);
+              break;
+            }
+          }
+          prev = prev.previousElementSibling;
+        }
+        let nxt = r.nextElementSibling;
+        while (nxt) {
+          if (nxt.localName === "r") {
+            const fcs = nxt.getElementsByTagNameNS(W_NS, "fldChar");
+            if (fcs.length > 0) {
+              const ft = fcs[0].getAttributeNS(W_NS, "fldCharType");
+              if (ft === "separate") {
+                runsToRemove.push(nxt);
+                let subNxt = nxt.nextElementSibling;
+                while (subNxt) {
+                  if (subNxt.localName === "r") {
+                    const sfcs = subNxt.getElementsByTagNameNS(W_NS, "fldChar");
+                    if (sfcs.length > 0 && sfcs[0].getAttributeNS(W_NS, "fldCharType") === "end") {
+                      runsToRemove.push(subNxt);
+                      break;
+                    }
+                  }
+                  subNxt = subNxt.nextElementSibling;
+                }
+                break;
+              } else if (ft === "end") {
+                runsToRemove.push(nxt);
+                break;
+              }
+            }
+          }
+          nxt = nxt.nextElementSibling;
+        }
+      }
+    }
+  }
+
+  runsToRemove.forEach(r => {
+    if (r.parentNode) r.parentNode.removeChild(r);
+  });
+
+  const allP = xmlDoc.getElementsByTagNameNS(W_NS, "p");
+  for (let i = 0; i < allP.length; i++) {
+    const p = allP[i];
+    if (!p.textContent.trim()) {
+      const fcs = p.getElementsByTagNameNS(W_NS, "fldChar");
+      for (let j = 0; j < fcs.length; j++) {
+        if (fcs[j].getAttributeNS(W_NS, "fldCharType") === "end") {
+          let pr = fcs[j].parentElement;
+          while (pr && pr.localName !== "r" && pr !== p) {
+            pr = pr.parentElement;
+          }
+          if (pr && pr.parentNode) {
+            pr.parentNode.removeChild(pr);
+          }
+        }
+      }
+    }
+  }
+}
+
 function createDelRun(doc, text, revId, author = "Co-Scientist", dateStr = null, isSuperscript = false) {
   const delEl = doc.createElementNS(W_NS, "w:del");
   delEl.setAttributeNS(W_NS, "w:id", String(revId));
@@ -874,9 +954,10 @@ export async function injectZoteroFieldsInBrowser(
     if (trackChanges && oldText !== condensedStr) {
       const delEl = createDelRun(xmlDoc, oldText, revCounter++, author, dateStr, site.kind === "sup");
       const insEl = createInsRun(xmlDoc, condensedStr, revCounter++, author, dateStr, true);
-      p.insertBefore(delEl, targetRun);
-      p.insertBefore(insEl, targetRun);
-      p.removeChild(targetRun);
+      const runParent = targetRun.parentNode || p;
+      runParent.insertBefore(delEl, targetRun);
+      runParent.insertBefore(insEl, targetRun);
+      runParent.removeChild(targetRun);
       targetAnchor = insEl;
     } else {
       if (tNodes.length > 0) {
@@ -907,13 +988,14 @@ export async function injectZoteroFieldsInBrowser(
     const rSep = createFieldRun(xmlDoc, "separate");
     const rEnd = createFieldRun(xmlDoc, "end");
 
-    p.insertBefore(rBegin, targetAnchor);
-    p.insertBefore(rInstr, targetAnchor);
-    p.insertBefore(rSep, targetAnchor);
+    const targetParent = targetAnchor.parentNode || p;
+    targetParent.insertBefore(rBegin, targetAnchor);
+    targetParent.insertBefore(rInstr, targetAnchor);
+    targetParent.insertBefore(rSep, targetAnchor);
     if (targetAnchor.nextSibling) {
-      p.insertBefore(rEnd, targetAnchor.nextSibling);
+      targetParent.insertBefore(rEnd, targetAnchor.nextSibling);
     } else {
-      p.appendChild(rEnd);
+      targetParent.appendChild(rEnd);
     }
   }
 
@@ -1101,42 +1183,70 @@ export async function injectZoteroFieldsInBrowser(
     });
 
     // Reorder atomic reference blocks in the document DOM
+    let sortedBlocks = blocks;
     if (renumberAma && blocks.length > 1) {
-      const sortedBlocks = [...blocks].sort((a, b) => a.newN - b.newN);
-      let anchorNode = null;
+      sortedBlocks = [...blocks].sort((a, b) => a.newN - b.newN);
+      let currAnchor = null;
       let parentNode = null;
 
       if (headerIdx >= 0 && headerIdx < paragraphs.length) {
         parentNode = paragraphs[headerIdx].parentNode;
-        anchorNode = paragraphs[headerIdx].nextSibling;
+        currAnchor = paragraphs[headerIdx];
       } else {
         parentNode = blocks[0].primaryP.parentNode;
-        anchorNode = blocks[0].primaryP;
+        currAnchor = blocks[0].primaryP.previousElementSibling;
       }
 
       if (parentNode) {
         sortedBlocks.forEach(b => {
           b.paragraphs.forEach(bp => {
-            parentNode.insertBefore(bp, anchorNode);
+            if (currAnchor) {
+              parentNode.insertBefore(bp, currAnchor.nextSibling);
+              currAnchor = bp;
+            } else {
+              parentNode.insertBefore(bp, parentNode.firstChild);
+              currAnchor = bp;
+            }
           });
         });
       }
     }
 
-    // In clean mode only: inject self-contained ADDIN ZOTERO_BIBL field marker on REFERENCES header
-    if (!trackChanges) {
-      const bibHeaderP = (headerIdx >= 0 && headerIdx < paragraphs.length) ? paragraphs[headerIdx] : blocks[0].primaryP;
-      if (bibHeaderP) {
-        const bibInstr = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY';
-        const bBegin = createFieldRun(xmlDoc, "begin");
-        const bInstr = createFieldRun(xmlDoc, "instr", bibInstr);
-        const bSep = createFieldRun(xmlDoc, "separate");
-        const bEnd = createFieldRun(xmlDoc, "end");
+    // Inject authentic multi-paragraph ADDIN ZOTERO_BIBL field enclosing all reference blocks
+    // Active in BOTH clean mode and track_changes mode
+    stripExistingBibliographyFields(xmlDoc);
 
-        bibHeaderP.appendChild(bBegin);
-        bibHeaderP.appendChild(bInstr);
-        bibHeaderP.appendChild(bSep);
-        bibHeaderP.appendChild(bEnd);
+    const bibHeaderP = (headerIdx >= 0 && headerIdx < paragraphs.length) ? paragraphs[headerIdx] : blocks[0].primaryP;
+    if (bibHeaderP) {
+      const bibInstr = ' ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBL {"schema":"https://github.com/citation-style-language/schema/raw/master/csl-bibliography.json","bibliography":{"formattedCitation":"","uncited":[],"omitted":[],"custom":[]}} ';
+      const bBegin = createFieldRun(xmlDoc, "begin");
+      const bInstr = createFieldRun(xmlDoc, "instr", bibInstr);
+      const bSep = createFieldRun(xmlDoc, "separate");
+
+      bibHeaderP.appendChild(bBegin);
+      bibHeaderP.appendChild(bInstr);
+      bibHeaderP.appendChild(bSep);
+
+      // Locate last reference paragraph
+      const lastBlock = (renumberAma && sortedBlocks.length > 0) ? sortedBlocks[sortedBlocks.length - 1] : blocks[blocks.length - 1];
+      const lastRefP = lastBlock ? lastBlock.paragraphs[lastBlock.paragraphs.length - 1] : null;
+
+      if (lastRefP) {
+        const nextP = lastRefP.nextElementSibling;
+        if (nextP && nextP.localName === "p" && !nextP.textContent.trim()) {
+          nextP.appendChild(createFieldRun(xmlDoc, "end"));
+        } else {
+          // Place end at the end of lastRefP (before sectPr if present)
+          const sectPr = lastRefP.getElementsByTagNameNS(W_NS, "sectPr")[0];
+          const endRun = createFieldRun(xmlDoc, "end");
+          if (sectPr) {
+            lastRefP.insertBefore(endRun, sectPr);
+          } else {
+            lastRefP.appendChild(endRun);
+          }
+        }
+      } else {
+        bibHeaderP.appendChild(createFieldRun(xmlDoc, "end"));
       }
     }
   }

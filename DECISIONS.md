@@ -192,5 +192,25 @@
   5. Added an interactive "View Full Audit Report" modal in `index.html` with clipboard copy and print/PDF formatting.
 - **Verification**: Verified via `test_40_missing_doi_insertion_in_tracked_docx`, `test_41_in_document_audit_table_generation` (41/41 unit tests pass), and headless Chrome CDP live test (`test_browser_audit_and_doi_recovery.py`) confirming real-time UI recovery, modal display, and valid XML insertion of recovered DOI and audit table.
 
+### [2026-11-15 13:10] ARCH-DECISION-017: Multi-Paragraph Zotero Bibliography Field Enclosure
+- **Context**: User requested: *"THR REFRENCES LIST DOES NOT APPEAR TO BE LINKED , LIKE WHEN ZOTERO MAKE IT IT LOOKS LINKED.. ASK ME IF YO CHECK HOW ZOTERO DOES THIS U HAVE ANY QUESTIONS , CAN YOU"*.
+- **Root Cause & Technical Constraints**:
+  1. In `server/linker.py` and `static/js/docx_engine.js`, `inject_bibliography_field()` previously injected a self-contained collapsed field (`begin -> instr -> separate -> end`) inside the single `REFERENCES` heading paragraph alone.
+  2. The actual reference paragraphs (`1. ...`, `2. ...`) sat outside the field tags as plain, unlinked paragraphs.
+  3. Clicking on any reference in Word showed plain text with zero field shading, and Zotero Word integration did not recognize the bibliography.
+  4. In Tracked Changes mode (`track_changes=True`), the bibliography field was previously skipped entirely (`if not track_changes:`).
+  5. In `static/js/docx_engine.js`, DOM reordering with a static `anchorNode` inserted all blocks before reference 1, leaving reference 1 out of order at the bottom.
+- **Decision & Implementation**:
+  1. Reverse-engineered authentic Zotero multi-paragraph bibliography OOXML structure from `ACTA2_Manuscript_11.14.2026.docx`: the `ADDIN ZOTERO_BIBL` field begins in the `REFERENCES` header paragraph (`begin`, `CSL_BIBL` schema instruction, `separate`), encloses all reference paragraphs (1..N), and closes with `end` at the end of the bibliography.
+  2. Implemented `strip_existing_bibliography_fields()` in both Python and JS to clean pre-existing Zotero field runs before injection, preventing duplicate or corrupt fields.
+  3. Re-architected `inject_bibliography_field()` to take `last_para`:
+     - If an empty paragraph already follows the references, `end` is inserted into it (preserving original paragraph count, such as 176 paragraphs in ACTA2).
+     - Otherwise, `end` is appended before any `<w:sectPr>` at the end of the final reference paragraph without inflating paragraph counts.
+  4. Enabled authentic bibliography field enclosure across BOTH clean and tracked changes modes.
+  5. Fixed DOM insertion traversal in `static/js/docx_engine.js` so blocks reorder consecutively after the header in sequential AMA order.
+  6. Ensured in-text citation field tags safely resolve their `targetParent` (`targetAnchor.parentNode || p`).
+- **Verification**: Verified via `test_42_zotero_bibliography_field_enclosure` (all 42/42 unit tests pass) and headless Chrome CDP automation test (`test_browser_zotero_bibl_field.py`), empirically confirming that both clean and tracked docx deliverables contain authentic multi-paragraph Zotero bibliography field enclosure with all 5/5 references inside.
+
+
 
 
