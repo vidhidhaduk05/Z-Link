@@ -18,6 +18,91 @@ from server.ris_generator import generate_ris
 from server.linker import link_docx_manuscript
 from server.models import ReferenceEntry
 
+def build_synthetic_clinical_manuscript() -> BytesIO:
+    doc = docx.Document()
+    doc.add_heading("Clinical Systematic Review of Vascular Arteriopathy", level=1)
+
+    p0 = doc.add_paragraph("Initial clinical investigations established the foundation ")
+    r0 = p0.add_run("1,2")
+    r0.font.superscript = True
+    p0.add_run(".")
+
+    p1 = doc.add_paragraph("In this cohort of 13 patients, de novo variants affecting p.Arg179 caused severe disease ")
+    r1 = p1.add_run("3")
+    r1.font.superscript = True
+    p1.add_run(".")
+
+    p2 = doc.add_paragraph("Further investigations characterized vascular mechanisms ")
+    r2 = p2.add_run("4")
+    r2.font.superscript = True
+    p2.add_run(".")
+
+    p3 = doc.add_paragraph("Overall survival was 95.7% and 76.7% at 5 and 10 years ")
+    r3 = p3.add_run("5")
+    r3.font.superscript = True
+    p3.add_run(".")
+
+    p4 = doc.add_paragraph("Clinical scores were 1.8 (0-8) with angiographic scale (2b-3) and stenosis (<30%) ")
+    r4 = p4.add_run("6")
+    r4.font.superscript = True
+    p4.add_run(".")
+
+    p5 = doc.add_paragraph("Follow-up confirmed 57.1% remissions ")
+    r5 = p5.add_run("7")
+    r5.font.superscript = True
+    p5.add_run(" and 43.3% stable disease ")
+    r6 = p5.add_run("8")
+    r6.font.superscript = True
+    p5.add_run(".")
+
+    p6 = doc.add_paragraph("Multicenter cohorts and kindreds were evaluated ")
+    r7 = p6.add_run("9,10")
+    r7.font.superscript = True
+    p6.add_run(".")
+
+    p7 = doc.add_paragraph("Comprehensive trials established therapeutic guidelines ")
+    r8 = p7.add_run("11-38")
+    r8.font.superscript = True
+    p7.add_run(".")
+
+    p8 = doc.add_paragraph("Among 40 females and 15 males (including 5 patients and 11 patients in subgroup A, total 47 of 60 patients), progression occurred ")
+    r9 = p8.add_run("39")
+    r9.font.superscript = True
+    p8.add_run(".")
+
+    p9 = doc.add_paragraph("Additional cohorts corroborated these findings ")
+    r10 = p9.add_run("40-42")
+    r10.font.superscript = True
+    p9.add_run(". Long-term outcomes showed sustained efficacy ")
+    r11 = p9.add_run("43")
+    r11.font.superscript = True
+    p9.add_run(".")
+
+    # Table
+    table = doc.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "Cohort"
+    table.rows[0].cells[1].text = "Incidence"
+    table.rows[1].cells[0].text = "Prospective"
+    table.rows[1].cells[1].text = "46.7%"
+
+    # References
+    FAMILY_NAMES = [
+        "Adams", "Baker", "Clark", "Davis", "Evans", "Ford", "Garcia", "Harris", "Jackson", "King",
+        "Lewis", "Miller", "Nelson", "Owens", "Parker", "Quinn", "Roberts", "Smith", "Taylor", "Thomas",
+        "Turner", "Walker", "White", "Williams", "Wilson", "Young", "Zimmerman", "Allen", "Bell", "Brooks",
+        "Campbell", "Carter", "Cook", "Cooper", "Edwards", "Foster", "Gray", "Green", "Hall", "Hill",
+        "Hughes", "James", "Kelly"
+    ]
+    doc.add_paragraph("REFERENCES")
+    for i in range(1, 44):
+        fam = FAMILY_NAMES[i - 1]
+        doc.add_paragraph(f"{i}. {fam} J, Smith R. Title of Study Number {i}. J Neuroradiol. 2020;40({i}):100-110. doi: 10.1000/journal.{i}")
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
 class TestZoteroLinkEngine(unittest.TestCase):
     docx_file = "sample_radiology_manuscript.docx"
 
@@ -125,14 +210,11 @@ class TestZoteroLinkEngine(unittest.TestCase):
         paras, sites_paren, refs = parse_paragraphs_list(bracket_paras, citation_format="paren")
         self.assertEqual(len(sites_paren), 0, "Paren mode should not match square bracket citations")
 
-    def test_08_acta2_real_world_manuscript(self):
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript file not present")
-
-        paras, sites, refs = parse_docx_manuscript(doc_path)
-        self.assertEqual(len(refs), 43, "ACTA2 manuscript must have exactly 43 references")
-        self.assertGreaterEqual(len(sites), 30, "Must detect all in-text citation sites")
+    def test_08_comprehensive_clinical_manuscript(self):
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf)
+        self.assertEqual(len(refs), 43, "Clinical manuscript must have exactly 43 references")
+        self.assertGreaterEqual(len(sites), 8, "Must detect all in-text citation sites")
 
         all_cited_nums = set()
         for s in sites:
@@ -152,19 +234,19 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(ris.count("ER  -"), 43, "RIS must have 43 complete entries")
 
         # Verify OOXML Native Zotero Field Injection
-        out_target = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_test_linked.docx"
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_target)
-        self.assertTrue(os.path.exists(out_target))
-
-        out_doc = docx.Document(out_target)
+        out_target = BytesIO()
+        doc_buf.seek(0)
+        link_docx_manuscript(doc_buf, sites, refs, output_target=out_target)
+        out_doc = docx.Document(BytesIO(out_target.getvalue()))
         xml_all = "".join([p._p.xml for p in out_doc.paragraphs])
         self.assertIn("ADDIN ZOTERO_ITEM", xml_all)
         self.assertIn("ADDIN ZOTERO_BIBL", xml_all)
         self.assertIn("ADDIN ZOTERO_PREF_1", xml_all)
 
-        orig_doc = docx.Document(doc_path)
-        self.assertEqual(len(out_doc.tables), len(orig_doc.tables), "All 11 tables must be preserved")
-        self.assertEqual(len(out_doc.paragraphs), len(orig_doc.paragraphs), "All 176 paragraphs must be preserved")
+        doc_buf.seek(0)
+        orig_doc = docx.Document(doc_buf)
+        self.assertEqual(len(out_doc.tables), len(orig_doc.tables), "All tables must be preserved")
+        self.assertEqual(len(out_doc.paragraphs), len(orig_doc.paragraphs), "All paragraphs must be preserved")
 
     def test_09_bot_verification_and_handle_discrimination(self):
         # 1. Test bot-protected real DOI (e.g. Oxford Academic / Brain 10.1093/brain/aws172)
@@ -278,11 +360,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIn("Reference [3] was cited before Reference [1]", warnings[0])
 
     def test_13_ris_metadata_completeness(self):
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript not present")
-
-        paras, sites, refs = parse_docx_manuscript(doc_path)
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf)
         ris = generate_ris(refs)
 
         # Check required standard RIS tags
@@ -294,26 +373,20 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(ris.count("ER  -"), 43, "Must have exactly 43 ER tags for 43 references")
 
     def test_14_docx_native_fields_xml_integrity(self):
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript not present")
-
-        paras, sites, refs = parse_docx_manuscript(doc_path)
-        out_target = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_integrity_check.docx"
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_target)
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf)
+        out_target = BytesIO()
+        doc_buf.seek(0)
+        link_docx_manuscript(doc_buf, sites, refs, output_target=out_target)
 
         # Open linked document and verify full XML structure
-        linked_doc = docx.Document(out_target)
+        linked_doc = docx.Document(BytesIO(out_target.getvalue()))
         self.assertEqual(len(linked_doc.paragraphs), len(paras))
-        self.assertEqual(len(linked_doc.tables), 11)
+        self.assertGreaterEqual(len(linked_doc.tables), 1)
 
         # Verify tables content is not corrupted
         first_table = linked_doc.tables[0]
         self.assertGreater(len(first_table.rows), 0)
-
-        # Clean up test artifact
-        if os.path.exists(out_target):
-            os.remove(out_target)
 
     def test_15_empty_and_corrupt_files(self):
         from server.parser import parse_paragraphs_list
@@ -357,15 +430,13 @@ class TestZoteroLinkEngine(unittest.TestCase):
 
     def test_17_format_profiler_and_parenthetical_immunity(self):
         from server.parser import parse_docx_manuscript
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript not present")
+        doc_buf = build_synthetic_clinical_manuscript()
 
-        # In Auto mode, ACTA2 manuscript should profile as 'sup'
-        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        # In Auto mode, clinical manuscript should profile as 'sup'
+        paras, sites, refs = parse_docx_manuscript(doc_buf, citation_format="auto")
         
         # Verify 100% of detected sites are superscripts
-        self.assertTrue(all(s.kind == "sup" for s in sites), "All detected sites in ACTA2 must be superscripts")
+        self.assertTrue(all(s.kind == "sup" for s in sites), "All detected sites must be superscripts")
         
         # Verify no parenthetical clinical scales or measurements were matched
         detected_texts = [s.text for s in sites]
@@ -431,10 +502,20 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(doi_ep.lower(), "10.1016/s1474-4422(12)70004-2")
 
         # 2. Test OpenAlex discovery
-        title_oa = "Brain arteriovenous malformations"
-        doi_oa, meta_oa = search_openalex_bibliographic("", title_oa)
-        self.assertTrue(bool(doi_oa), "OpenAlex should find Brain arteriovenous malformations paper")
-        self.assertIn("10.1038/nrdp.2015.8", doi_oa.lower())
+        from unittest.mock import patch, MagicMock
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "results": [{
+                "doi": "https://doi.org/10.1038/nrdp.2015.8",
+                "title": "Brain arteriovenous malformations"
+            }]
+        }
+        with patch("requests.get", return_value=mock_resp):
+            title_oa = "Brain arteriovenous malformations"
+            doi_oa, meta_oa = search_openalex_bibliographic("", title_oa)
+            self.assertTrue(bool(doi_oa), "OpenAlex should find Brain arteriovenous malformations paper")
+            self.assertIn("10.1038/nrdp.2015.8", doi_oa.lower())
 
     def test_21_ama_sequential_renumbering_and_reordering(self):
         from io import BytesIO
@@ -544,18 +625,16 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertTrue(ref_lines[1].startswith("2. Third Author"))
         self.assertTrue(ref_lines[2].startswith("3. Uncited Author"))
 
-    def test_24_acta2_identity_permutation(self):
+    def test_24_clinical_manuscript_identity_permutation(self):
         from server.parser import parse_docx_manuscript
         from server.linker import build_ama_renumbering_map
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript not present")
-        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf, citation_format="auto")
         mapping, first_seen, uncited = build_ama_renumbering_map(refs, sites)
-        self.assertEqual(len(uncited), 0, "All 43 references are cited in ACTA2")
+        self.assertEqual(len(uncited), 0, "All 43 references are cited")
         # Every reference number maps to itself: mapping[n] == n for all n
         for n in range(1, 44):
-            self.assertEqual(mapping[n], n, f"Reference {n} must map to itself in ACTA2")
+            self.assertEqual(mapping[n], n, f"Reference {n} must map to itself")
 
     def test_25_track_changes_in_text_citations(self):
         from server.parser import parse_docx_manuscript
@@ -713,15 +792,13 @@ class TestZoteroLinkEngine(unittest.TestCase):
         from server.linker import link_docx_manuscript
         from docx.oxml.ns import qn
 
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript not present")
-
-        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf, citation_format="auto")
 
         # Clean run
         out_clean = BytesIO()
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_clean, track_changes=False)
+        doc_buf.seek(0)
+        link_docx_manuscript(doc_buf, sites, refs, output_target=out_clean, track_changes=False)
         out_clean.seek(0)
         doc_clean = docx.Document(out_clean)
         clean_dels = sum(len(p._p.findall(qn('w:del'))) for p in doc_clean.paragraphs)
@@ -729,7 +806,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
 
         # Tracked run
         out_tracked = BytesIO()
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_tracked, track_changes=True)
+        doc_buf.seek(0)
+        link_docx_manuscript(doc_buf, sites, refs, output_target=out_tracked, track_changes=True)
         out_tracked.seek(0)
         doc_tracked = docx.Document(out_tracked)
         self.assertIsNotNone(doc_tracked.settings._element.find(qn('w:trackRevisions')))
@@ -811,13 +889,11 @@ class TestZoteroLinkEngine(unittest.TestCase):
         from server.linker import link_docx_manuscript
         from docx.oxml.ns import qn
 
-        doc_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(doc_path):
-            self.skipTest("ACTA2 manuscript not present")
-
-        paras, sites, refs = parse_docx_manuscript(doc_path, citation_format="auto")
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf, citation_format="auto")
         out_buf = BytesIO()
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_buf, track_changes=True, renumber_ama=True)
+        doc_buf.seek(0)
+        link_docx_manuscript(doc_buf, sites, refs, output_target=out_buf, track_changes=True, renumber_ama=True)
         out_buf.seek(0)
 
         out_doc = docx.Document(out_buf)
@@ -1215,16 +1291,16 @@ class TestZoteroLinkEngine(unittest.TestCase):
                 break
         self.assertIsNotNone(tracked_bibl_start, "Tracked document must contain ADDIN ZOTERO_BIBL field")
 
-        # 3. Verify real-world ACTA2 manuscript has zero duplicate bibl fields
-        acta2_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if os.path.exists(acta2_path):
-            a_paras, a_sites, a_refs = parse_docx_manuscript(acta2_path)
-            a_out = BytesIO()
-            link_docx_manuscript(acta2_path, a_sites, a_refs, output_target=a_out, track_changes=False)
-            a_out.seek(0)
-            a_doc = docx.Document(a_out)
-            bibl_instr_count = sum(len(p._p.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')) for p in a_doc.paragraphs)
-            self.assertEqual(bibl_instr_count, 1, "Must contain exactly 1 ADDIN ZOTERO_BIBL field (no duplicates)")
+        # 3. Verify clinical manuscript has zero duplicate bibl fields
+        syn_buf = build_synthetic_clinical_manuscript()
+        a_paras, a_sites, a_refs = parse_docx_manuscript(syn_buf)
+        a_out = BytesIO()
+        syn_buf.seek(0)
+        link_docx_manuscript(syn_buf, a_sites, a_refs, output_target=a_out, track_changes=False)
+        a_out.seek(0)
+        a_doc = docx.Document(a_out)
+        bibl_instr_count = sum(len(p._p.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')) for p in a_doc.paragraphs)
+        self.assertEqual(bibl_instr_count, 1, "Must contain exactly 1 ADDIN ZOTERO_BIBL field (no duplicates)")
 
     def test_43_preview_citation_offsets_and_clinical_immunity(self):
         """
@@ -1233,14 +1309,10 @@ class TestZoteroLinkEngine(unittest.TestCase):
         1. Exact character offsets (match_start, match_end) are strictly grounded.
         2. Numbers appearing earlier in the sentence ('13 patients', 'p.Arg179', '95.7%')
            are never corrupted or wrapped in citation pills.
-        3. Real-world ACTA2 manuscript paragraphs (P52, P68, P80, P83, P84) render with zero
-           false-positive pill injections.
+        3. Real-world clinical manuscript paragraphs render with zero false-positive pill injections.
         """
-        acta2_path = "/home/vd00026/Desktop/Zotero_Link/ACTA2_Manuscript_11.14.2026.docx"
-        if not os.path.exists(acta2_path):
-            self.skipTest("ACTA2 manuscript file not present")
-
-        paras, sites, refs = parse_docx_manuscript(acta2_path)
+        doc_buf = build_synthetic_clinical_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf)
 
         def render_preview_paragraph(text, p_sites):
             # Mirror the exact app.js grounded offset slicing algorithm
@@ -1278,40 +1350,31 @@ class TestZoteroLinkEngine(unittest.TestCase):
                 fragments.append(text[last_idx:])
             return "".join(fragments)
 
-        # 1. Inspect P52: must contain "13 patients" as pure text, not "1<span class="cit-pill">3</span> patients"
-        p52_text = paras[52]
-        p52_sites = [s for s in sites if s.paragraph_idx == 52]
-        p52_html = render_preview_paragraph(p52_text, p52_sites)
-        self.assertIn("13 patients", p52_html, "P52 must contain '13 patients' as plain text")
-        self.assertNotIn('1<span class="cit-pill"', p52_html, "P52 must not turn '13 patients' into a pill")
-        self.assertIn("p.Arg179", p52_html, "P52 must contain 'p.Arg179' intact")
+        # 1. Paragraph with 13 patients: must contain "13 patients" as pure text, not "1<span class="cit-pill">3</span> patients"
+        p_idx_13 = next(i for i, t in enumerate(paras) if "13 patients" in t)
+        p13_html = render_preview_paragraph(paras[p_idx_13], [s for s in sites if s.paragraph_idx == p_idx_13])
+        self.assertIn("13 patients", p13_html, "Must contain '13 patients' as plain text")
+        self.assertNotIn('1<span class="cit-pill"', p13_html, "Must not turn '13 patients' into a pill")
+        self.assertIn("p.Arg179", p13_html, "Must contain 'p.Arg179' intact")
 
-        # 2. Inspect P68: must contain "40 females", "15 males", "5 patients", "11 patients", "47 of 60 patients" as pure text
-        p68_text = paras[68]
-        p68_sites = [s for s in sites if s.paragraph_idx == 68]
-        p68_html = render_preview_paragraph(p68_text, p68_sites)
-        self.assertIn("11 patients", p68_html, "P68 must contain '11 patients' as plain text")
-        self.assertIn("47 of 60 patients", p68_html, "P68 must contain '47 of 60 patients' as plain text")
-        self.assertIn('<span class="cit-pill" data-nums="39">39</span>', p68_html, "P68 must correctly wrap citation 39")
+        # 2. Paragraph with 40 females: must contain "40 females", "15 males", "5 patients", "11 patients", "47 of 60 patients" as pure text
+        p_idx_40 = next(i for i, t in enumerate(paras) if "40 females" in t)
+        p40_html = render_preview_paragraph(paras[p_idx_40], [s for s in sites if s.paragraph_idx == p_idx_40])
+        self.assertIn("11 patients", p40_html, "Must contain '11 patients' as plain text")
+        self.assertIn("47 of 60 patients", p40_html, "Must contain '47 of 60 patients' as plain text")
+        self.assertIn('<span class="cit-pill" data-nums="39">39</span>', p40_html, "Must correctly wrap citation 39")
 
-        # 3. Inspect P80: must contain "95.7%" and "76.7%" as pure text, not corrupted by citations 5, 6
-        p80_text = paras[80]
-        p80_sites = [s for s in sites if s.paragraph_idx == 80]
-        p80_html = render_preview_paragraph(p80_text, p80_sites)
-        self.assertIn("95.7%", p80_html, "P80 must contain '95.7%' as plain text")
-        self.assertIn("76.7%", p80_html, "P80 must contain '76.7%' as plain text")
+        # 3. Paragraph with 95.7%: must contain "95.7%" and "76.7%" as pure text, not corrupted by citations
+        p_idx_95 = next(i for i, t in enumerate(paras) if "95.7%" in t)
+        p95_html = render_preview_paragraph(paras[p_idx_95], [s for s in sites if s.paragraph_idx == p_idx_95])
+        self.assertIn("95.7%", p95_html, "Must contain '95.7%' as plain text")
+        self.assertIn("76.7%", p95_html, "Must contain '76.7%' as plain text")
 
-        # 4. Inspect P83: must contain "57.1%" as pure text
-        p83_text = paras[83]
-        p83_sites = [s for s in sites if s.paragraph_idx == 83]
-        p83_html = render_preview_paragraph(p83_text, p83_sites)
-        self.assertIn("57.1%", p83_html, "P83 must contain '57.1%' as plain text")
-
-        # 5. Inspect P84: must contain "43.3%" as pure text
-        p84_text = paras[84]
-        p84_sites = [s for s in sites if s.paragraph_idx == 84]
-        p84_html = render_preview_paragraph(p84_text, p84_sites)
-        self.assertIn("43.3%", p84_html, "P84 must contain '43.3%' as plain text")
+        # 4. Paragraph with 57.1%: must contain "57.1%" as pure text
+        p_idx_57 = next(i for i, t in enumerate(paras) if "57.1%" in t)
+        p57_html = render_preview_paragraph(paras[p_idx_57], [s for s in sites if s.paragraph_idx == p_idx_57])
+        self.assertIn("57.1%", p57_html, "Must contain '57.1%' as plain text")
+        self.assertIn("43.3%", p57_html, "Must contain '43.3%' as plain text")
 
     def test_44_csl_style_switching_ama_vancouver_apa(self):
         """

@@ -48,13 +48,6 @@ def serve_sample_doc():
         return FileResponse(sample_path)
     raise HTTPException(status_code=404, detail="Sample manuscript not found.")
 
-@app.get("/ACTA2_Manuscript_11.14.2026.docx")
-def serve_acta2_doc():
-    doc_path = os.path.join(os.path.dirname(__file__), "..", "ACTA2_Manuscript_11.14.2026.docx")
-    if os.path.exists(doc_path):
-        return FileResponse(doc_path)
-    raise HTTPException(status_code=404, detail="ACTA2 manuscript not found.")
-
 JOBS_CACHE: Dict[str, JobRecord] = {}
 
 def execute_job_linking(job: JobRecord):

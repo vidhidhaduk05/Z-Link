@@ -327,6 +327,27 @@
   - Python Unit Tests: Added `test_46_defensive_hardening_and_failure_modes` to `tests/test_engine.py` (all 46/46 unit tests pass).
   - Headless Chrome CDP Live Test: Empirically verified via `scripts/verify_csl_switching_live.py` (all checks passed with 43 references and 33 citation sites).
 
+### [2026-11-15 16:45] ARCH-DECISION-023: Complete Elimination of ACTA2 Files and Migration to Hermetic Synthetic Test Fixtures
+- **Context**: User requested: *"can you remve the acta 2 files from the repo as well"*.
+- **Technical Actions**:
+  1. **Git & Filesystem Purge**:
+     - Removed `ACTA2_Manuscript_11.14.2026.docx`, `ACTA2_Manuscript_zotero_linked.docx`, and `ACTA2_Manuscript_test_linked.docx` from git tracking and disk.
+  2. **UI & API De-coupling**:
+     - Removed `btnActa2` ("📋 Load ACTA2 Manuscript (43 Refs)") from `index.html`.
+     - Removed `btnActa2` click listener and fetch logic from `static/js/app.js`.
+     - Removed `@app.get("/ACTA2_Manuscript_11.14.2026.docx")` route from `server/main.py`.
+  3. **Hermetic In-Memory Test Fixture in `tests/test_engine.py`**:
+     - Constructed `build_synthetic_clinical_manuscript() -> BytesIO` generating an in-memory 43-reference clinical systematic review with embedded tables, AMA consecutive in-text superscripts (1..43), and clinical non-citation parentheticals (`13 patients`, `p.Arg179`, `40 females`, `95.7%`, `(0-8)`, `(<30%)`).
+     - Migrated `test_08`, `test_13`, `test_14`, `test_17`, `test_24`, `test_28`, `test_31`, `test_41`, and `test_43` to use `build_synthetic_clinical_manuscript()`, eliminating file dependencies and avoiding test skips.
+     - Mocked OpenAlex in `test_20` to prevent flaky external HTTP 429 rate limit failures.
+  4. **Headless Chrome CDP Test Update**:
+     - Updated `scripts/verify_csl_switching_live.py` to upload the synthetic clinical manuscript via the standard JavaScript File API.
+     - Added assertions confirming both `btnSample` and `btnActa2` are completely removed from the DOM.
+- **Verification**:
+  - Python Unit Tests: All 46/46 unit tests in `tests/test_engine.py` pass with 100% success in 6.88s (0 failures, 0 skips).
+  - Headless Chrome CDP Live Test: Empirically verified live in Chrome (43 references, 12 citation sites, APA dynamic switching, clinical count immunity, alphabetical sorting, AJNR docx generation, and clean reset).
+
+
 
 
 

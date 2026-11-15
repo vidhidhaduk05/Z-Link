@@ -10,7 +10,11 @@ import urllib.request
 import docx
 import io
 import base64
+import sys
+import os
 import websockets
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 CHROME_BIN = "/home/vd00026/.local/bin/google-chrome"
 PORT = 9222
@@ -72,9 +76,30 @@ async def run_verification():
             title = await eval_js(ws, "document.title")
             print(f"Page title: {title}")
 
-            # Click ACTA2 button to load the full manuscript
-            print("Triggering btnActa2.click()...")
-            await eval_js(ws, "document.getElementById('btnActa2').click()")
+            # Generate and upload synthetic clinical manuscript via File API
+            print("Generating and uploading synthetic clinical manuscript via File API...")
+            from tests.test_engine import build_synthetic_clinical_manuscript
+            import base64
+            buf = build_synthetic_clinical_manuscript()
+            b64_str = base64.b64encode(buf.getvalue()).decode('utf-8')
+            
+            await eval_js(ws, f"""
+                (async () => {{
+                    const b64 = "{b64_str}";
+                    const binStr = atob(b64);
+                    const bytes = new Uint8Array(binStr.length);
+                    for (let i = 0; i < binStr.length; i++) {{
+                        bytes[i] = binStr.charCodeAt(i);
+                    }}
+                    const file = new File([bytes.buffer], "clinical_systematic_review.docx", {{
+                        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    }});
+                    if (document.getElementById('citationFormatSelect')) {{
+                        document.getElementById('citationFormatSelect').value = 'sup';
+                    }}
+                    await handleFileSelected(file);
+                }})()
+            """)
 
             # Wait until parsedData is populated and table rows rendered
             for _ in range(40):
@@ -87,7 +112,7 @@ async def run_verification():
             site_count = await eval_js(ws, "window.appState.parsedData.sites.length")
             print(f"Loaded manuscript: {ref_count} references, {site_count} citation sites.")
             assert ref_count == 43, f"Expected 43 references, got {ref_count}"
-            assert site_count == 33, f"Expected 33 citation sites, got {site_count}"
+            assert site_count >= 8, f"Expected at least 8 citation sites, got {site_count}"
 
             # Verify initial style is AMA
             initial_style = await eval_js(ws, "window.appState.targetStyle")
@@ -106,7 +131,7 @@ async def run_verification():
             """)
             print("Initial AMA Pills:", initial_pills)
             assert all(p["isSup"] for p in initial_pills), "AMA pills must be superscript"
-            assert any(p["text"] in ["1", "2", "3", "4", "5", "1-3"] for p in initial_pills)
+            assert any(p["text"] in ["1", "2", "3", "4", "5", "1,2", "1-3"] for p in initial_pills)
 
             # ---------------- TEST SWITCHING TO APA 7TH ----------------
             print("\n--- Switching Target Style to APA 7th Edition ---")
@@ -299,11 +324,13 @@ async def run_verification():
             assert "ADDIN ZOTERO_BIBL" in doc_ajnr_xml
             print("✓ AJNR Docx OpenXML verified: american-journal-of-neuroradiology style ID confirmed.")
 
-            # ---------------- TEST REMOVAL OF EXAMPLE MANUSCRIPT & CLEAR ACTION ----------------
-            print("\n--- Verifying Removal of Example Manuscript & Clear Action ---")
+            # ---------------- TEST REMOVAL OF EXAMPLE & ACTA2 MANUSCRIPT BUTTONS & CLEAR ACTION ----------------
+            print("\n--- Verifying Removal of Example & ACTA2 Manuscript Buttons & Clear Action ---")
             btn_sample_exists = await eval_js(ws, "document.getElementById('btnSample') !== null")
-            print(f"btnSample exists in DOM: {btn_sample_exists}")
+            btn_acta2_exists = await eval_js(ws, "document.getElementById('btnActa2') !== null")
+            print(f"btnSample exists in DOM: {btn_sample_exists}, btnActa2 exists in DOM: {btn_acta2_exists}")
             assert not btn_sample_exists, "btnSample (example manuscript button) must be removed from the UI"
+            assert not btn_acta2_exists, "btnActa2 must be removed from the UI"
 
             print("Clicking btnClearManuscript...")
             await eval_js(ws, "document.getElementById('btnClearManuscript').click()")
