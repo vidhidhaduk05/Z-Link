@@ -125,3 +125,16 @@
   3. Prior insertions (`<w:ins>`) are promoted into regular runs, ensuring 100% of newly added citations and references are visible to the profiling, parsing, and linking engines.
   4. Brings the document into the "Final / Accepted" baseline before applying Co-Scientist citations, AMA renumbering, and recovered DOIs, preventing any invalid nested `<w:ins><w:ins>` tags.
 - **Verification**: Verified via `test_32_document_with_existing_tracked_insertions`, `test_33_document_with_existing_tracked_deletions`, and `test_34_accept_prior_revisions_baseline` in `tests/test_engine.py` (34/34 tests passing).
+
+### [2026-11-15 11:00] ARCH-DECISION-012: Guarded Finite State Machine (JobRecord / JobStatus) & Zero Implicit States Guarantee
+- **Context**: User required an exhaustive audit to ensure zero implicit states and robust lifecycle state management from upload through parsing, auditing, linking, and export.
+- **Root Cause & Technical Constraints**:
+  1. Ad-hoc in-memory dictionary mutations (`JOBS_CACHE[id] = {...}`) permitted implicit status inference and lacked pre-condition guards.
+  2. Downloading tracked or clean documents directly from `AUDITED` state could result in unhandled linking exceptions or silent partial mutations if state transitions were unvalidated.
+- **Decision & Implementation**:
+  1. Created explicit `JobStatus` enum: `INITIALIZED`, `PARSING`, `AUDITED`, `LINKING`, `READY`, `ERROR`.
+  2. Implemented typed `JobRecord` Pydantic model with strict `transition_to(target_status)` dispatcher enforcing allowed state transitions and raising explicit `ValueError` on illegal jumps.
+  3. Refactored `execute_job_linking` into a guarded dispatcher ensuring jobs only enter `LINKING` from `AUDITED` or `READY`, preventing race conditions or double-linking mutations.
+  4. Updated all download endpoints (`/api/download/{job_id}/docx`, `/api/download/{job_id}/tracked_docx`, `/api/download/{job_id}/ris`, `/api/download/{job_id}/report`) to enforce guarded transitions and guarantee deterministic error responses.
+- **Verification**: Verified via `test_35_guarded_job_state_machine` and end-to-end integration API audit across all 6 REST endpoints (35/35 tests passing).
+

@@ -12,7 +12,7 @@ EUROPE_PMC_REST = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 OPENALEX_REST = "https://api.openalex.org/works"
 PUBMED_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-TIMEOUT = 6
+TIMEOUT = 10
 
 def check_doi_handle(doi: str) -> Tuple[bool, str]:
     """

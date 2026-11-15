@@ -912,6 +912,33 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(len(doc._body._element.xpath('.//w:del')), 0)
         self.assertEqual(len(doc._body._element.xpath('.//w:ins')), 0)
 
+    def test_35_guarded_job_state_machine(self):
+        from server.models import JobStatus, JobRecord
+
+        job = JobRecord(job_id="test-job-123", status=JobStatus.INITIALIZED, filename="test.docx")
+        self.assertEqual(job.status, JobStatus.INITIALIZED)
+
+        # Illegal jump directly to READY
+        with self.assertRaises(ValueError):
+            job.transition_to(JobStatus.READY)
+
+        # Legal progression
+        job.transition_to(JobStatus.PARSING)
+        self.assertEqual(job.status, JobStatus.PARSING)
+
+        job.transition_to(JobStatus.AUDITED)
+        self.assertEqual(job.status, JobStatus.AUDITED)
+
+        # Cannot jump back to PARSING from AUDITED
+        with self.assertRaises(ValueError):
+            job.transition_to(JobStatus.PARSING)
+
+        job.transition_to(JobStatus.LINKING)
+        self.assertEqual(job.status, JobStatus.LINKING)
+
+        job.transition_to(JobStatus.READY)
+        self.assertEqual(job.status, JobStatus.READY)
+
 if __name__ == "__main__":
     unittest.main()
 

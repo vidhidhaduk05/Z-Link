@@ -81,3 +81,45 @@ class AuditSummary(BaseModel):
     verdicts: Dict[int, ValidationVerdict]
     mappings: Dict[int, UsageMapping]
 
+from enum import Enum
+
+class JobStatus(str, Enum):
+    INITIALIZED = "initialized"
+    PARSING = "parsing"
+    AUDITED = "audited"
+    LINKING = "linking"
+    READY = "ready"
+    ERROR = "error"
+
+class JobRecord(BaseModel):
+    job_id: str
+    status: JobStatus = JobStatus.INITIALIZED
+    filename: str
+    file_bytes: Optional[bytes] = None
+    summary: Optional[AuditSummary] = None
+    paras: List[str] = Field(default_factory=list)
+    sites: List[CitationSite] = Field(default_factory=list)
+    references: List[ReferenceEntry] = Field(default_factory=list)
+    verdicts: Dict[int, ValidationVerdict] = Field(default_factory=dict)
+    mappings: Dict[int, Any] = Field(default_factory=dict)
+    mapping: Dict[int, int] = Field(default_factory=dict)
+    first_seen_order: List[int] = Field(default_factory=list)
+    uncited: List[int] = Field(default_factory=list)
+    linked_bytes: Optional[bytes] = None
+    tracked_bytes: Optional[bytes] = None
+    ris_text: Optional[str] = None
+    error_message: Optional[str] = None
+
+    def transition_to(self, target_status: JobStatus):
+        allowed = {
+            JobStatus.INITIALIZED: [JobStatus.PARSING, JobStatus.ERROR],
+            JobStatus.PARSING: [JobStatus.AUDITED, JobStatus.ERROR],
+            JobStatus.AUDITED: [JobStatus.LINKING, JobStatus.ERROR],
+            JobStatus.LINKING: [JobStatus.READY, JobStatus.ERROR],
+            JobStatus.READY: [JobStatus.LINKING, JobStatus.ERROR],
+            JobStatus.ERROR: [JobStatus.INITIALIZED]
+        }
+        if target_status not in allowed.get(self.status, []):
+            raise ValueError(f"Illegal state transition from {self.status.value} to {target_status.value}")
+        self.status = target_status
+

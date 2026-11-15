@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from server.models import AuditSummary, ReferenceEntry, CitationSite, ValidationVerdict
+from server.models import AuditSummary, ReferenceEntry, CitationSite, ValidationVerdict, JobStatus, JobRecord
 from server.parser import parse_docx_manuscript, parse_paragraphs_list
 from server.validator import validate_single_reference, map_usage_and_sequence
 from server.ris_generator import generate_ris
@@ -55,7 +55,48 @@ def serve_acta2_doc():
         return FileResponse(doc_path)
     raise HTTPException(status_code=404, detail="ACTA2 manuscript not found.")
 
-JOBS_CACHE: Dict[str, Dict] = {}
+JOBS_CACHE: Dict[str, JobRecord] = {}
+
+def execute_job_linking(job: JobRecord):
+    """Guarded execution of linking for a job."""
+    if not job.file_bytes:
+        raise HTTPException(status_code=400, detail="Linking requires an uploaded .docx file.")
+    
+    if job.status not in (JobStatus.AUDITED, JobStatus.READY):
+        raise HTTPException(status_code=409, detail=f"Job cannot be linked in status '{job.status.value}'")
+
+    job.transition_to(JobStatus.LINKING)
+    try:
+        clean_stream = BytesIO()
+        link_docx_manuscript(
+            docx_input=BytesIO(job.file_bytes),
+            sites=job.sites,
+            references=job.references,
+            verdicts=job.verdicts,
+            output_target=clean_stream,
+            renumber_ama=True,
+            track_changes=False
+        )
+        job.linked_bytes = clean_stream.getvalue()
+
+        tracked_stream = BytesIO()
+        link_docx_manuscript(
+            docx_input=BytesIO(job.file_bytes),
+            sites=job.sites,
+            references=job.references,
+            verdicts=job.verdicts,
+            output_target=tracked_stream,
+            renumber_ama=True,
+            track_changes=True,
+            author="Co-Scientist"
+        )
+        job.tracked_bytes = tracked_stream.getvalue()
+        job.ris_text = generate_ris(job.references, job.verdicts, mapping=job.mapping)
+        job.transition_to(JobStatus.READY)
+    except Exception as e:
+        job.error_message = str(e)
+        job.transition_to(JobStatus.ERROR)
+        raise HTTPException(status_code=500, detail=f"Failed to link manuscript: {str(e)}")
 
 @app.get("/api/health")
 def health():
@@ -75,18 +116,29 @@ async def audit_manuscript(
     filename = "manuscript.docx"
     file_bytes = None
 
+    job = JobRecord(job_id=job_id, status=JobStatus.INITIALIZED, filename=filename)
+    JOBS_CACHE[job_id] = job
+    job.transition_to(JobStatus.PARSING)
+
     if file:
         filename = file.filename
+        job.filename = filename
         file_bytes = await file.read()
+        job.file_bytes = file_bytes
         try:
             paras, sites, references = parse_docx_manuscript(BytesIO(file_bytes), citation_format=citation_format)
         except Exception as e:
+            job.error_message = f"Failed to parse docx: {str(e)}"
+            job.transition_to(JobStatus.ERROR)
             raise HTTPException(status_code=400, detail=f"Failed to parse docx: {str(e)}")
     elif text_content:
         filename = "pasted_manuscript.txt"
+        job.filename = filename
         para_lines = [p.strip() for p in text_content.split("\n\n") if p.strip()]
         paras, sites, references = parse_paragraphs_list(para_lines, citation_format=citation_format)
     else:
+        job.error_message = "Must provide either a .docx file or text_content."
+        job.transition_to(JobStatus.ERROR)
         raise HTTPException(status_code=400, detail="Must provide either a .docx file or text_content.")
 
     # Run validation & reachability concurrently on all references
@@ -132,21 +184,18 @@ async def audit_manuscript(
     # Calculate AMA Sequential Renumbering Map
     mapping, first_seen_order, uncited = build_ama_renumbering_map(references, sites)
 
-    JOBS_CACHE[job_id] = {
-        "summary": summary,
-        "file_bytes": file_bytes,
-        "filename": filename,
-        "paras": paras,
-        "sites": sites,
-        "references": references,
-        "verdicts": verdicts,
-        "mappings": mappings,
-        "mapping": mapping,
-        "first_seen_order": first_seen_order,
-        "uncited": uncited
-    }
+    job.summary = summary
+    job.paras = paras
+    job.sites = sites
+    job.references = references
+    job.verdicts = verdicts
+    job.mappings = mappings
+    job.mapping = mapping
+    job.first_seen_order = first_seen_order
+    job.uncited = uncited
+    job.transition_to(JobStatus.AUDITED)
 
-    return {"job_id": job_id, "summary": summary, "ama_mapping": mapping}
+    return {"job_id": job_id, "summary": summary, "ama_mapping": mapping, "status": job.status.value}
 
 @app.post("/api/link/{job_id}")
 async def link_manuscript(job_id: str):
@@ -154,41 +203,11 @@ async def link_manuscript(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found or expired.")
     
     job = JOBS_CACHE[job_id]
-    if not job["file_bytes"]:
-        raise HTTPException(status_code=400, detail="Linking requires an uploaded .docx file.")
-
-    # Generate Clean Linked document
-    clean_stream = BytesIO()
-    link_docx_manuscript(
-        docx_input=BytesIO(job["file_bytes"]),
-        sites=job["sites"],
-        references=job["references"],
-        verdicts=job["verdicts"],
-        output_target=clean_stream,
-        renumber_ama=True,
-        track_changes=False
-    )
-    job["linked_bytes"] = clean_stream.getvalue()
-
-    # Generate Tracked Changes document (for peer reviewers / editors)
-    tracked_stream = BytesIO()
-    link_docx_manuscript(
-        docx_input=BytesIO(job["file_bytes"]),
-        sites=job["sites"],
-        references=job["references"],
-        verdicts=job["verdicts"],
-        output_target=tracked_stream,
-        renumber_ama=True,
-        track_changes=True,
-        author="Co-Scientist"
-    )
-    job["tracked_bytes"] = tracked_stream.getvalue()
-
-    job["ris_text"] = generate_ris(job["references"], job["verdicts"], mapping=job.get("mapping"))
+    execute_job_linking(job)
 
     return {
         "job_id": job_id,
-        "status": "ready",
+        "status": job.status.value,
         "download_docx": f"/api/download/{job_id}/docx",
         "download_tracked_docx": f"/api/download/{job_id}/tracked_docx",
         "download_ris": f"/api/download/{job_id}/ris",
@@ -200,16 +219,24 @@ def download_docx(job_id: str, mode: Optional[str] = None):
     if job_id not in JOBS_CACHE:
         raise HTTPException(status_code=404, detail="Job not found.")
 
-    if mode == "tracked" and "tracked_bytes" in JOBS_CACHE[job_id]:
-        content = JOBS_CACHE[job_id]["tracked_bytes"]
+    job = JOBS_CACHE[job_id]
+    if job.status == JobStatus.AUDITED:
+        execute_job_linking(job)
+    elif job.status == JobStatus.ERROR:
+        raise HTTPException(status_code=409, detail=f"Job failed with error: {job.error_message}")
+    elif job.status != JobStatus.READY:
+        raise HTTPException(status_code=409, detail=f"Job is not ready. Status: {job.status.value}")
+
+    if mode == "tracked" and job.tracked_bytes:
+        content = job.tracked_bytes
         suffix = "tracked_changes"
-    elif "linked_bytes" in JOBS_CACHE[job_id]:
-        content = JOBS_CACHE[job_id]["linked_bytes"]
+    elif job.linked_bytes:
+        content = job.linked_bytes
         suffix = "zotero_linked"
     else:
         raise HTTPException(status_code=404, detail="Linked file not ready.")
 
-    orig_name = JOBS_CACHE[job_id]["filename"]
+    orig_name = job.filename
     base = os.path.splitext(orig_name)[0]
     out_name = f"{base}_{suffix}.docx"
     return Response(
@@ -220,14 +247,25 @@ def download_docx(job_id: str, mode: Optional[str] = None):
 
 @app.get("/api/download/{job_id}/tracked_docx")
 def download_tracked_docx(job_id: str):
-    if job_id not in JOBS_CACHE or "tracked_bytes" not in JOBS_CACHE[job_id]:
+    if job_id not in JOBS_CACHE:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    job = JOBS_CACHE[job_id]
+    if job.status == JobStatus.AUDITED:
+        execute_job_linking(job)
+    elif job.status == JobStatus.ERROR:
+        raise HTTPException(status_code=409, detail=f"Job failed with error: {job.error_message}")
+    elif job.status != JobStatus.READY:
+        raise HTTPException(status_code=409, detail=f"Job is not ready. Status: {job.status.value}")
+
+    if not job.tracked_bytes:
         raise HTTPException(status_code=404, detail="Tracked changes file not ready.")
 
-    orig_name = JOBS_CACHE[job_id]["filename"]
+    orig_name = job.filename
     base = os.path.splitext(orig_name)[0]
     out_name = f"{base}_tracked_changes.docx"
     return Response(
-        content=JOBS_CACHE[job_id]["tracked_bytes"],
+        content=job.tracked_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{out_name}"'}
     )
@@ -238,8 +276,11 @@ def download_ris(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found.")
     
     job = JOBS_CACHE[job_id]
-    ris_content = job.get("ris_text") or generate_ris(job["references"], job["verdicts"])
-    base = os.path.splitext(job["filename"])[0]
+    if job.status == JobStatus.AUDITED:
+        execute_job_linking(job)
+
+    ris_content = job.ris_text or generate_ris(job.references, job.verdicts, mapping=job.mapping)
+    base = os.path.splitext(job.filename)[0]
     return Response(
         content=ris_content,
         media_type="application/x-research-info-systems",
@@ -251,7 +292,7 @@ def download_report(job_id: str):
     if job_id not in JOBS_CACHE:
         raise HTTPException(status_code=404, detail="Job not found.")
     job = JOBS_CACHE[job_id]
-    summary: AuditSummary = job["summary"]
+    summary: AuditSummary = job.summary
 
     lines = [
         f"# Co-Scientist Reference Audit Report: {summary.filename}",
@@ -287,7 +328,7 @@ def download_report(job_id: str):
         if v and v.notes:
             lines.append("- **Audit Notes:** " + " | ".join(v.notes))
 
-    base = os.path.splitext(job["filename"])[0]
+    base = os.path.splitext(job.filename)[0]
     return Response(
         content="\n".join(lines),
         media_type="text/markdown",
