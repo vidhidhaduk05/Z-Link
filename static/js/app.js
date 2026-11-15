@@ -67,29 +67,53 @@ function setStepper(activeKey) {
 
 // ---------------- Drag & Drop Ingest ----------------
 
+// Global window guards: prevent browser from opening/downloading dropped file if dropped outside dropzone
+window.addEventListener('dragover', (e) => {
+  e.preventDefault();
+}, false);
+
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+}, false);
+
 if (dropzone && fileInput) {
   dropzone.addEventListener('click', () => fileInput.click());
 
-  dropzone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropzone.classList.add('dragover');
+  ['dragenter', 'dragover'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+      dropzone.classList.add('dragover');
+    });
   });
 
-  dropzone.addEventListener('dragleave', () => {
-    dropzone.classList.remove('dragover');
+  dropzone.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only remove class if leaving the dropzone element itself
+    if (e.currentTarget === dropzone && (!e.relatedTarget || !dropzone.contains(e.relatedTarget))) {
+      dropzone.classList.remove('dragover');
+    }
   });
 
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     dropzone.classList.remove('dragover');
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileSelected(e.dataTransfer.files[0]);
+    const dt = e.dataTransfer;
+    if (dt && dt.files && dt.files.length > 0) {
+      handleFileSelected(dt.files[0]);
     }
   });
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      handleFileSelected(e.target.files[0]);
+      const file = e.target.files[0];
+      fileInput.value = ''; // Reset so the same file can be re-selected if needed
+      handleFileSelected(file);
     }
   });
 }

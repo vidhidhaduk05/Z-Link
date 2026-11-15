@@ -280,6 +280,10 @@ main.app-container {
   margin-top: 1rem;
 }
 
+.dropzone-box * {
+  pointer-events: none;
+}
+
 .dropzone-box:hover, .dropzone-box.dragover {
   background: var(--color-paper-dark);
   border-color: var(--color-accent);

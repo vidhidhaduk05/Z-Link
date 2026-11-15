@@ -166,7 +166,12 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
     throw new Error("JSZip library not loaded.");
   }
 
-  const zip = await window.JSZip.loadAsync(fileOrBuffer);
+  let data = fileOrBuffer;
+  if (fileOrBuffer && typeof fileOrBuffer.arrayBuffer === "function") {
+    data = await fileOrBuffer.arrayBuffer();
+  }
+
+  const zip = await window.JSZip.loadAsync(data);
   const docXmlStr = await zip.file("word/document.xml").async("text");
   
   const parser = new DOMParser();
@@ -427,9 +432,6 @@ export async function parseDocxFile(fileOrBuffer, citationFormat = "auto") {
           }
         }
       }
-      combinedPrev += rText;
-    }
-  }
       combinedPrev += rText;
     }
   }

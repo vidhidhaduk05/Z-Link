@@ -162,4 +162,20 @@
   3. Enforced a calendar year invariant: any parenthetical/bracket number $\ge 1900$ is recognized as a calendar year and excluded from citation indexing.
 - **Verification**: Verified via `test_37_clinical_patient_count_statement_rejection`, `test_38_in_text_patient_count_paren_rejection`, `test_39_in_text_age_and_year_range_rejection`, and tested against real-world `ACTA2_Manuscript_11.14.2026.docx` (all 39 tests passing with 0 false-positive citation sites).
 
+### [2026-11-15 12:17] ARCH-DECISION-015: Drag-and-Drop Restoration & Browser Module Syntax Repair
+- **Context**: User reported drag-and-drop was not working and they were unable to use the interface.
+- **Root Cause & Technical Constraints**:
+  1. A duplicate closing brace block in `static/js/docx_engine.js` triggered an `Uncaught SyntaxError: Unexpected token '}'` when `static/js/app.js` imported the module in the browser.
+  2. Because the module failed compilation, none of the drag-and-drop or file input event listeners were ever registered on the DOM.
+  3. Drag events over child elements inside `.dropzone-box` caused premature `dragleave` triggers due to lack of `pointer-events: none` on child elements.
+  4. Missing `window` dragover/drop preventDefault allowed browser navigation when drops missed the dropzone boundaries.
+- **Decision & Implementation**:
+  1. Fixed the syntax error in `static/js/docx_engine.js` and verified module syntax with `node --input-type=module -c`.
+  2. Added `.dropzone-box * { pointer-events: none; }` to `static/css/master-theme.css`.
+  3. Added global `window` dragover and drop preventDefault handlers in `static/js/app.js`.
+  4. Hardened dropzone event handling with explicit `e.dataTransfer.dropEffect = 'copy'` and `e.stopPropagation()`.
+  5. Added `await fileOrBuffer.arrayBuffer()` conversion in `parseDocxFile` for reliable binary decoding across all browsers.
+- **Verification**: Verified live in headless Google Chrome using scratchpad CDP test scripts (`test_browser_live.py`, `test_browser_acta2_drag_drop.py`, `test_browser_click_upload.py`). Both `sample_radiology_manuscript.docx` and `ACTA2_Manuscript_11.14.2026.docx` drag and drop successfully with zero console errors, full table rendering, and functional deliverable downloads.
+
+
 
