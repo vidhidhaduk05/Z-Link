@@ -30,7 +30,7 @@ window.appState = appState;
 // DOM Elements
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
-const btnSample = document.getElementById('btnSample');
+const btnClearManuscript = document.getElementById('btnClearManuscript');
 const btnActa2 = document.getElementById('btnActa2');
 const citationFormatSelect = document.getElementById('citationFormatSelect');
 const customFormatInput = document.getElementById('customFormatInput');
@@ -129,22 +129,32 @@ if (dropzone && fileInput) {
   });
 }
 
-if (btnSample) {
-  btnSample.addEventListener('click', async () => {
-    try {
-      btnSample.textContent = '⏳ Loading Sample...';
-      const resp = await fetch('sample_radiology_manuscript.docx');
-      if (!resp.ok) throw new Error("Could not find sample manuscript file.");
-      const blob = await resp.blob();
-      const file = new File([blob], "sample_radiology_manuscript.docx", {
-        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      });
-      await handleFileSelected(file);
-      btnSample.textContent = '📄 Sample Radiology Paper';
-    } catch (err) {
-      alert("Error loading sample: " + err.message);
-      btnSample.textContent = '📄 Sample Radiology Paper';
-    }
+if (btnClearManuscript) {
+  btnClearManuscript.addEventListener('click', () => {
+    appState.fsmState = 'IDLE';
+    appState.currentFile = null;
+    appState.fileName = '';
+    appState.parsedData = null;
+    appState.verdicts = {};
+    appState.mappings = {};
+    appState.firstSeenOrder = [];
+    appState.amaMapping = {};
+    appState.hasOrderChanges = false;
+    appState.selectedRefNum = 1;
+
+    if (resultsSection) resultsSection.style.display = 'none';
+    if (tableBody) tableBody.innerHTML = '';
+    if (manuscriptViewer) manuscriptViewer.innerHTML = '';
+    if (activeRefCard) activeRefCard.innerHTML = '<p style="color: var(--reading-ink-muted); font-size: 13px;">No reference selected. Click any reference row above to audit context and DOI verification.</p>';
+    if (metricCitations) metricCitations.textContent = '0';
+    if (metricReferences) metricReferences.textContent = '0';
+    if (metricReachable) metricReachable.textContent = '0';
+    if (metricBotGated) metricBotGated.textContent = '0';
+    if (metricBroken) metricBroken.textContent = '0';
+    if (fileInput) fileInput.value = '';
+    setStepper('upload');
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 }
 
@@ -210,6 +220,9 @@ async function handleFileSelected(file) {
   appState.fileName = file.name;
   appState.fsmState = 'PARSING';
   setStepper('parse');
+
+  const loadedFileName = document.getElementById('loadedFileName');
+  if (loadedFileName) loadedFileName.textContent = file.name;
 
   resultsSection.style.display = 'block';
   resultsSection.scrollIntoView({ behavior: 'smooth' });

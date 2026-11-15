@@ -289,6 +289,16 @@
     - Switched live to `radiology`, `ajnr`, `ajr`, and `european-radiology`.
     - Generated 1.4 MB Word document in `ajnr` mode with authentic `american-journal-of-neuroradiology` OpenXML field codes.
 
+### [2026-11-15 14:54] ARCH-DECISION-021: Removal of Example Manuscript & Addition of Clear/Reset Action
+- **Context**: User requested: *"can you remove the example manuscript"*.
+- **Decision & Implementation**:
+  1. Removed `btnSample` ("📄 Sample Radiology Paper") from the upload action bar in `index.html` and eliminated its click event listener in `static/js/app.js` (satisfying ECC zero dead code rule).
+  2. Added a persistent, clean "Audited Manuscript" header bar in `#resultsSection` displaying the current document's filename (`#loadedFileName`) and a dedicated `"✕ Clear / Remove Manuscript"` button (`#btnClearManuscript`).
+  3. When clicked, `#btnClearManuscript` completely clears `appState` (fsmState, currentFile, fileName, parsedData, verdicts, mappings, amaMapping), clears DOM tables and manuscript preview fragments, resets all metric counters to 0, resets the file input element, and smoothly scrolls back to the upload dropzone.
+- **Verification**:
+  - Python Unit Tests: All 45/45 tests in `tests/test_engine.py` continue to pass cleanly.
+  - Headless Chrome CDP Live Test: Verified via `scripts/verify_csl_switching_live.py` that `btnSample` is completely absent from the DOM (`btn_sample_exists == False`) and clicking `#btnClearManuscript` resets `resultsSection.style.display` to `'none'`, `appState.parsedData` to `null`, and `appState.fileName` to `''`.
+
 
 
 

@@ -109,9 +109,6 @@
           <button class="btn-editorial-secondary" id="btnActa2">
             📋 Load ACTA2 Manuscript (43 Refs)
           </button>
-          <button class="btn-editorial-secondary" id="btnSample">
-            📄 Sample Radiology Paper
-          </button>
         </div>
         <button class="btn-editorial-primary" onclick="document.getElementById('fileInput').click()">
           📂 Select Word Document
@@ -121,6 +118,20 @@
 
     <!-- Interactive Results & Explorer Section (Hidden initially) -->
     <section id="resultsSection" style="display: none;">
+      
+      <!-- Loaded Manuscript Header Bar & Clear Action -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; padding: 14px 18px; background: #faf7f9; border: 1px solid var(--border-outline); border-radius: var(--radius-sm); flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 20px;">📄</span>
+          <div>
+            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--editorial-plum);">Audited Manuscript</div>
+            <div id="loadedFileName" style="font-family: var(--font-headline); font-weight: 700; color: var(--primary-wine); font-size: 15px;">Manuscript Loaded</div>
+          </div>
+        </div>
+        <button class="btn-editorial-secondary" id="btnClearManuscript" style="font-size: 12px; padding: 6px 14px; color: #991b1b; border-color: #fca5a5; background: #fff; cursor: pointer;">
+          ✕ Clear / Remove Manuscript
+        </button>
+      </div>
       
       <!-- Metrics Bar -->
       <div class="metrics-grid">

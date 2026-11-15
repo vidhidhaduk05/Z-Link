@@ -299,6 +299,25 @@ async def run_verification():
             assert "ADDIN ZOTERO_BIBL" in doc_ajnr_xml
             print("✓ AJNR Docx OpenXML verified: american-journal-of-neuroradiology style ID confirmed.")
 
+            # ---------------- TEST REMOVAL OF EXAMPLE MANUSCRIPT & CLEAR ACTION ----------------
+            print("\n--- Verifying Removal of Example Manuscript & Clear Action ---")
+            btn_sample_exists = await eval_js(ws, "document.getElementById('btnSample') !== null")
+            print(f"btnSample exists in DOM: {btn_sample_exists}")
+            assert not btn_sample_exists, "btnSample (example manuscript button) must be removed from the UI"
+
+            print("Clicking btnClearManuscript...")
+            await eval_js(ws, "document.getElementById('btnClearManuscript').click()")
+            await asyncio.sleep(0.3)
+
+            is_hidden = await eval_js(ws, "document.getElementById('resultsSection').style.display === 'none'")
+            parsed_is_null = await eval_js(ws, "window.appState.parsedData === null")
+            file_name_empty = await eval_js(ws, "window.appState.fileName === ''")
+            print(f"Results hidden: {is_hidden}, Parsed data null: {parsed_is_null}, File name empty: {file_name_empty}")
+            assert is_hidden, "Results section must be hidden after clicking Clear Manuscript"
+            assert parsed_is_null, "appState.parsedData must be reset to null"
+            assert file_name_empty, "appState.fileName must be reset to empty"
+            print("✓ Clear / Remove Manuscript verified live: DOM and appState cleanly reset to IDLE.")
+
             print("\nALL LIVE BROWSER CSL VERIFICATION CHECKS PASSED PERFECTLY!")
 
     finally:
