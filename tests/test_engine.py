@@ -1230,8 +1230,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIn("10.1038/s41588-020-0001-x", xml_str)
         self.assertIn("w:ins", xml_str)
 
-    def test_41_in_document_audit_table_generation(self):
-        """Verifies that the Vidhi Dhaduk Reference Audit & Reachability Ledger table can be generated when explicitly requested."""
+    def test_41_strict_immunity_from_audit_ledger_and_readme_insertion(self):
+        """Verifies that the reference audit table and README/instructions are NEVER EVER entered into the manuscript."""
         from server.parser import parse_docx_manuscript
         from server.linker import link_docx_manuscript
         from server.models import ValidationVerdict
@@ -1260,29 +1260,24 @@ class TestZoteroLinkEngine(unittest.TestCase):
             output_target=out_buf,
             renumber_ama=True,
             track_changes=False,
-            include_audit_ledger=True
+            include_audit_ledger=True  # Even if caller passes include_audit_ledger=True
         )
         out_buf.seek(0)
 
         out_doc = docx.Document(out_buf)
-        # Verify ledger heading exists
-        heading_found = any("Vidhi Dhaduk Reference Audit & Reachability Ledger" in p.text for p in out_doc.paragraphs)
-        self.assertTrue(heading_found, "Ledger heading must be present in output document")
+        # 1. Verify ZERO tables were added
+        self.assertEqual(len(out_doc.tables), 0, "Manuscript must NEVER EVER contain an audit table")
 
-        # Verify audit table exists and has 5 columns
-        self.assertGreaterEqual(len(out_doc.tables), 1, "Must contain at least 1 table (the audit ledger)")
-        audit_table = out_doc.tables[-1]
-        self.assertEqual(len(audit_table.columns), 5, "Audit table must have 5 columns")
-        headers = [c.text.strip() for c in audit_table.rows[0].cells]
-        self.assertEqual(headers, ["#", "Bibliographic Record", "DOI Identifier", "Audit Status", "Citations"])
+        # 2. Verify ledger heading or audit text is NEVER present
+        all_para_text = " ".join(p.text for p in out_doc.paragraphs)
+        self.assertNotIn("Reference Audit & Reachability Ledger", all_para_text)
+        self.assertNotIn("Audit Status", all_para_text)
+        self.assertNotIn("DOI Identifier", all_para_text)
+        self.assertNotIn("README", all_para_text.upper())
+        self.assertNotIn("INSTRUCTIONS", all_para_text.upper())
 
-        # Verify data rows
-        self.assertEqual(len(audit_table.rows), 3, "Header + 2 reference rows")
-        row1_text = " ".join(c.text for c in audit_table.rows[1].cells)
-        row2_text = " ".join(c.text for c in audit_table.rows[2].cells)
-        self.assertIn("10.1148/radiol.20200001", row1_text)
-        self.assertIn("10.1038/s41586-021-0001-y", row2_text)
-        self.assertIn("DOI Recovered", row2_text)
+        # 3. Verify manuscript contains ONLY the manuscript content and bibliography
+        self.assertEqual(len(out_doc.paragraphs), 4, "Must contain exactly the 4 original manuscript paragraphs")
 
     def test_42_zotero_bibliography_field_enclosure(self):
         """

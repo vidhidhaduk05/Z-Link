@@ -540,113 +540,6 @@ def build_csl_record(ref: ReferenceEntry, verdict: Optional[ValidationVerdict] =
         "author": author_list
     }
 
-def append_audit_ledger_to_docx(
-    doc: docx.Document,
-    references: List[ReferenceEntry],
-    verdicts: Optional[Dict[int, Any]] = None,
-    mappings: Optional[Dict[int, Any]] = None,
-    mapping: Optional[Dict[int, int]] = None
-):
-    """
-    Appends a formal 'Co-Scientist Reference Audit & Reachability Ledger'
-    at the end of the manuscript document.
-    """
-    if not references:
-        return
-
-    # Add spacing and heading
-    p_head = doc.add_paragraph()
-    p_head.paragraph_format.space_before = Pt(24)
-    p_head.paragraph_format.space_after = Pt(4)
-    r_head = p_head.add_run("Vidhi Dhaduk Reference Audit & Reachability Ledger")
-    r_head.bold = True
-    r_head.font.size = Pt(13)
-    r_head.font.color.rgb = RGBColor(0x3A, 0x0F, 0x34)  # Primary Wine
-
-    # Subtitle / Metadata
-    p_sub = doc.add_paragraph()
-    p_sub.paragraph_format.space_after = Pt(12)
-    r_sub = p_sub.add_run(
-        f"Independent scholarly verification across Crossref, DOI Foundation Handle Registry, Europe PMC, and OpenAlex. "
-        f"Audited {len(references)} bibliography references. Formatted for peer review verification."
-    )
-    r_sub.font.size = Pt(9.5)
-    r_sub.font.italic = True
-    r_sub.font.color.rgb = RGBColor(0x62, 0x53, 0x5D)
-
-    # 5-column table
-    table = doc.add_table(rows=1, cols=5)
-    table.style = 'Table Grid'
-    table.autofit = False
-
-    hdr_cells = table.rows[0].cells
-    hdr_titles = ["#", "Bibliographic Record", "DOI Identifier", "Audit Status", "Citations"]
-    col_widths = [Inches(0.9), Inches(3.2), Inches(1.8), Inches(1.4), Inches(0.8)]
-
-    for idx, (title, width) in enumerate(zip(hdr_titles, col_widths)):
-        hdr_cells[idx].text = title
-        hdr_cells[idx].width = width
-        shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="3A0F34"/>')
-        hdr_cells[idx]._tc.get_or_add_tcPr().append(shd)
-        for p in hdr_cells[idx].paragraphs:
-            for r in p.runs:
-                r.font.bold = True
-                r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                r.font.size = Pt(9)
-
-    sorted_refs = list(references)
-    if mapping:
-        sorted_refs.sort(key=lambda r: mapping.get(r.ref_num, r.ref_num))
-
-    for r_item in sorted_refs:
-        old_n = r_item.ref_num
-        new_n = (mapping or {}).get(old_n, old_n)
-        v = (verdicts or {}).get(old_n)
-        m = (mappings or {}).get(old_n)
-
-        v_status = getattr(v, 'status', '') if v else ''
-        is_rec = getattr(v, 'is_recovered_doi', False) or getattr(v, 'is_recovered', False) if v else False
-        is_bot = getattr(v, 'is_bot_gated', False) if v else False
-        is_reach = getattr(v, 'is_reachable', False) if v else False
-        doi_val = (getattr(v, 'recovered_doi', '') or getattr(v, 'doi', '') or getattr(r_item, 'doi', '') or '').strip()
-
-        if is_rec or v_status == 'recovered':
-            status_text = "DOI Recovered"
-        elif is_bot or v_status == 'bot_protected':
-            status_text = "Bot Gated / Paywall"
-        elif is_reach or v_status == 'verified':
-            status_text = "Verified Live (200 OK)"
-        elif v_status == 'unreachable':
-            status_text = "Unreachable (404)"
-        elif not doi_val:
-            status_text = "Missing DOI"
-        else:
-            status_text = "Verified"
-
-        cit_count = 0
-        if m:
-            cit_count = len(getattr(m, 'occurrences', []) if hasattr(m, 'occurrences') else m.get('occurrences', []))
-
-        row_cells = table.add_row().cells
-        for idx, width in enumerate(col_widths):
-            row_cells[idx].width = width
-
-        num_str = f"[{new_n}]" if new_n == old_n else f"[{new_n}] (Orig {old_n})"
-        row_cells[0].text = num_str
-
-        rec_title = getattr(v, 'crossref_title', '') or getattr(r_item, 'title', '') or r_item.raw_text[:80]
-        row_cells[1].text = rec_title
-
-        row_cells[2].text = doi_val if doi_val else "None"
-        row_cells[3].text = status_text
-        row_cells[4].text = f"{cit_count}x"
-
-        for c in row_cells:
-            for p in c.paragraphs:
-                for r in p.runs:
-                    r.font.size = Pt(8.5)
-                    r.font.color.rgb = RGBColor(0x4F, 0x44, 0x4B)
-
 def link_docx_manuscript(
     docx_input: Union[str, BytesIO],
     sites: List[CitationSite],
@@ -999,10 +892,6 @@ def link_docx_manuscript(
             inject_bibliography_field(doc, doc.paragraphs[header_idx], last_para=last_ref_para)
         elif blocks:
             inject_bibliography_field(doc, blocks[0].primary_para, last_para=last_ref_para)
-
-    # Append Co-Scientist Reference Audit & Reachability Ledger
-    if include_audit_ledger and references:
-        append_audit_ledger_to_docx(doc, references, verdicts, mappings, mapping)
 
     # Inject document preferences with active target style
     inject_doc_prefs(doc, style_id=style_id, style_name=style_name, library_id=1)

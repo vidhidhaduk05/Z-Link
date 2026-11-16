@@ -366,6 +366,21 @@
   - Python Unit Tests: Added `test_47_clean_copy_has_zero_audit_tables_by_default` in `tests/test_engine.py`; all 47/47 unit tests pass.
   - Headless Chrome CDP Live Test: Empirically verified via `scripts/verify_csl_switching_live.py` that the exported `.docx` contains zero audit tables, author tags are `Vidhi Dhaduk`, and sample/ACTA2 buttons remain eliminated.
 
+### [2026-11-16 10:05] ARCH-DECISION-025: Absolute Manuscript Cleanliness Guarantee — Permanent Purge of In-Document Audit Tables & README Injection
+- **Context**: User command: *"the read me and refrence audit should never ever be entered into the manuscript do you understand me"*.
+- **Technical Actions**:
+  1. **Complete Removal of Audit Ledger Insertion Code**:
+     - Permanently deleted `append_audit_ledger_to_docx` from `server/linker.py` (106 lines removed).
+     - Permanently deleted `appendAuditLedgerToDocx` from `static/js/docx_engine.js` (209 lines removed).
+     - Removed invocation logic in both Python backend and JavaScript in-browser engine. No code exists in the codebase capable of constructing or injecting an audit table, reachability ledger, or README text into a `.docx` manuscript.
+  2. **Absolute Clean Manuscript Invariant**:
+     - Exported manuscripts (both clean and tracked changes) strictly contain only the author's original manuscript content and the Zotero-linked bibliography.
+     - Reference audit data is strictly confined to the web UI dashboard, printable referee modal, and standalone Markdown/text report downloads.
+- **Verification**:
+  - Python Unit Tests: Converted `test_41` into `test_41_strict_immunity_from_audit_ledger_and_readme_insertion` (verifies 0 tables in document and 0 audit/readme strings even if caller passes `include_audit_ledger=True`). All 47/47 tests pass.
+  - Headless Chrome CDP Live Test: Ran `scripts/verify_csl_switching_live.py`, confirming live browser export produces clean document with 0 audit tables.
+
+
 
 
 

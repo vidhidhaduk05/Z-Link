@@ -450,8 +450,8 @@ function renderAuditTable() {
     } else {
       const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
       const isRenumbered = amaNum !== ref.ref_num;
-      const renumberedTag = isRenumbered 
-        ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ #${amaNum}</span>` 
+      const renumberedTag = isRenumbered
+        ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ #${amaNum}</span>`
         : '';
       cell1Html = `[${ref.ref_num}]${renumberedTag}`;
     }
@@ -535,8 +535,8 @@ function updateAuditTableRow(refNum) {
   } else {
     const amaNum = (appState.amaMapping && appState.amaMapping[ref.ref_num]) || ref.ref_num;
     const isRenumbered = amaNum !== ref.ref_num;
-    const renumberedTag = isRenumbered 
-      ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ #${amaNum}</span>` 
+    const renumberedTag = isRenumbered
+      ? `<br/><span style="display: inline-block; margin-top: 3px; font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; border-radius: 3px; font-weight: 600;" title="Will be re-ordered to Reference #${amaNum}">→ #${amaNum}</span>`
       : '';
     cell1Html = `[${ref.ref_num}]${renumberedTag}`;
   }
@@ -858,7 +858,7 @@ function generateAuditReportHtml() {
     const amaNum = (appState.amaMapping && appState.amaMapping[r.ref_num]) || r.ref_num;
     const numDisplay = (amaNum === r.ref_num) ? `[${r.ref_num}]` : `[${r.ref_num}] → AMA #${amaNum}`;
     const doiDisplay = r.doi ? `<a href="https://doi.org/${encodeURIComponent(r.doi)}" target="_blank" style="color: var(--editorial-plum);">${r.doi}</a>` : '<span style="color: #9ca3af;">Missing</span>';
-    
+
     let statusBadge = '<span class="badge-reach missing">No DOI</span>';
     if (v.status === 'recovered' || v.is_recovered) {
       statusBadge = '<span class="badge-reach recovered">🔍 DOI Recovered</span>';
@@ -1005,7 +1005,7 @@ if (btnDownloadTrackedDocx) {
     try {
       const targetStyle = appState.targetStyle || 'ama';
       btnDownloadTrackedDocx.textContent = '⏳ Generating Tracked Changes...';
-      const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, true, "Vidhi Dhaduk", false, targetStyle);
+      const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, true, "Vidhi Dhaduk", targetStyle);
       const baseName = appState.fileName.replace(/\.docx$/i, '');
       downloadBlob(blob, `${baseName}_${targetStyle}_tracked_changes.docx`);
       btnDownloadTrackedDocx.textContent = '📝 Download Tracked Changes (.docx)';
@@ -1021,7 +1021,7 @@ btnDownloadDocx.addEventListener('click', async () => {
   try {
     const targetStyle = appState.targetStyle || 'ama';
     btnDownloadDocx.textContent = '⏳ Injecting & Re-ordering...';
-    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, false, "Vidhi Dhaduk", false, targetStyle);
+    const blob = await injectZoteroFieldsInBrowser(appState.parsedData, appState.verdicts, true, false, "Vidhi Dhaduk", targetStyle);
     const baseName = appState.fileName.replace(/\.docx$/i, '');
     downloadBlob(blob, `${baseName}_${targetStyle}_zotero_linked.docx`);
     btnDownloadDocx.textContent = '📄 Download Clean Linked (.docx)';
