@@ -6,7 +6,7 @@ import requests
 from typing import Dict, List, Tuple
 from server.models import ReferenceEntry, CitationSite, ValidationVerdict, UsageMapping, UsageOccurrence, AuditSummary
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CoScientistAuditor/1.0"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 VidhiDhadukAuditor/1.0"
 CROSSREF_API = "https://api.crossref.org/works"
 EUROPE_PMC_REST = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 OPENALEX_REST = "https://api.openalex.org/works"
@@ -105,7 +105,7 @@ def query_crossref(doi: str) -> Dict:
     clean_doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", clean_doi, flags=re.IGNORECASE)
     clean_doi = re.sub(r"^doi:\s*", "", clean_doi, flags=re.IGNORECASE)
     url = f"{CROSSREF_API}/{clean_doi}"
-    headers = {"User-Agent": f"CoScientist-Auditor/1.0 (mailto:coscientist-auditor@academic.org)"}
+    headers = {"User-Agent": f"VidhiDhaduk-Auditor/1.0 (mailto:vidhidhaduk-auditor@academic.org)"}
     try:
         r = requests.get(url, headers=headers, timeout=TIMEOUT)
         if r.status_code == 200:
@@ -145,7 +145,7 @@ def search_crossref_bibliographic(raw_text: str, title: str = "", authors: List[
     if not query_str or len(query_str) < 15:
         return "", {}
 
-    headers = {"User-Agent": f"CoScientist-Auditor/1.0 (mailto:coscientist-auditor@academic.org)"}
+    headers = {"User-Agent": f"VidhiDhaduk-Auditor/1.0 (mailto:vidhidhaduk-auditor@academic.org)"}
     params = {"query.bibliographic": query_str[:300], "rows": 1}
     try:
         r = requests.get(CROSSREF_API, params=params, headers=headers, timeout=TIMEOUT)

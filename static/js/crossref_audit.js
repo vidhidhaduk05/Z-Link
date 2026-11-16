@@ -1,5 +1,5 @@
 /**
- * Co-Scientist Reference Auditor: In-Browser Crossref, Handle Registry & Anti-Bot Reachability Engine
+ * Vidhi Dhaduk Reference Auditor: In-Browser Crossref, Handle Registry & Anti-Bot Reachability Engine
  * Queries DOI Foundation Handle API (Universal CORS), Crossref, and OpenAlex.
  */
 

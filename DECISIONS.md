@@ -380,6 +380,25 @@
   - Python Unit Tests: Converted `test_41` into `test_41_strict_immunity_from_audit_ledger_and_readme_insertion` (verifies 0 tables in document and 0 audit/readme strings even if caller passes `include_audit_ledger=True`). All 47/47 tests pass.
   - Headless Chrome CDP Live Test: Ran `scripts/verify_csl_switching_live.py`, confirming live browser export produces clean document with 0 audit tables.
 
+### [2026-11-16 13:45] ARCH-DECISION-026: Elephant-Goldfish Model (EGM) Multi-Perspective Audit, Table Citations Support, Dynamic CSL Backend Parity, and Memory Hardening
+- **Context**: User requested adoption of Google Elephant-Goldfish Model (EGM) framework (`google/elephant-goldfish-model`), inquiring if it was added, and instructing to fix the codebase using it.
+- **EGM Personas & Discovered Failure Modes**:
+  1. **`egm-codebase-details` (Pedantic Technical Quality Auditor)**:
+     - Discovered that `doc.paragraphs` in python-docx only iterates direct children of `<w:body>`, completely dropping any `<w:p>` inside `<w:tbl>` cells (`<w:tbl><w:tr><w:tc><w:p>`). While browser JS `xmlDoc.getElementsByTagNameNS(W_NS, "p")` processed table cells, Python backend completely skipped table citations and suffered paragraph offset desynchronization.
+     - Implemented `get_all_document_paragraphs(doc)` in `server/parser.py` using `doc._body._element.xpath('.//w:p')`, achieving 100% parity across Python and JavaScript DOM traversals.
+  2. **`egm-design` (Design Critic)**:
+     - Discovered unbounded `JOBS_CACHE` memory leak where raw manuscript bytes were stored indefinitely without eviction. Replaced with bounded LRU eviction cache (`OrderedDict`, `MAX_JOBS_CACHE = 50`).
+     - Discovered backend `/api/audit` did not accept `target_style`, causing the backend to always link manuscripts in AMA format regardless of user selection. Plumbed `target_style` from `/api/audit` through to `JobRecord`, `execute_job_linking`, and dynamic download filenames (`{base}_{suffix}_{target_style}.docx`).
+  3. **`egm-zoom-out` & `egm-style` (Skeptical Architect & Copy Editor)**:
+     - Sanitized all remaining user-agent and header comments to `"Vidhi Dhaduk Reference Auditor & Zotero Linker"`.
+     - Confirmed non-superscript styles (e.g. APA author-date, IEEE brackets) preserve spacing and trailing punctuation without hoisting periods into the sentence.
+     - Confirmed 0 mentions of forbidden terms ("Biomni", "Laya", "Storm").
+- **Verification**:
+  - Python Unit Tests: Added `test_48_table_cell_citation_detection_and_linking`, `test_49_backend_api_target_style_switching`, and `test_50_bounded_jobs_cache_lru_eviction` to `tests/test_engine.py`. All 50/50 unit tests pass in 13.2s.
+  - Headless Chrome CDP Live Test: Empirically verified via `scripts/verify_csl_switching_live.py` (all checks passed live in Chrome).
+  - Live End-to-End API Test: Verified `/api/audit` and `/api/download/{job_id}/docx` with `target_style='apa'` generates clean author-date format and strict `"Vidhi Dhaduk"` track changes attribution with zero audit tables.
+
+
 
 
 

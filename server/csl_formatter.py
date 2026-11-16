@@ -159,6 +159,13 @@ CSL_STYLES = {
         "in_text_kind": "author-date",
         "sort": "alphabetical"
     },
+    "apa": {
+        "id": "http://www.zotero.org/styles/apa",
+        "name": "American Psychological Association 7th edition",
+        "category": "author-date",
+        "in_text_kind": "author-date",
+        "sort": "alphabetical"
+    },
     "harvard": {
         "id": "http://www.zotero.org/styles/harvard-cite-them-right",
         "name": "Harvard (Cite Them Right)",
@@ -304,30 +311,36 @@ def format_author_date_citation(refs_list: List[ReferenceEntry], style_key: str 
     return f"({'; '.join(citation_strings)})"
 
 def format_in_text_for_style(target_style_key: str, nums: List[int], refs_list: List[ReferenceEntry]) -> Dict[str, Any]:
-    style = CSL_STYLES.get(target_style_key, CSL_STYLES["ama"])
+    norm_key = (target_style_key or "ama").strip().lower()
+    if norm_key in ("apa", "apa7", "apa-7th"):
+        norm_key = "apa-7th"
+    elif norm_key in ("harvard", "harvard-cite-them-right"):
+        norm_key = "harvard"
+
+    style = CSL_STYLES.get(norm_key, CSL_STYLES.get(target_style_key, CSL_STYLES["ama"]))
 
     if style["category"] == "author-date":
         return {
-            "text": format_author_date_citation(refs_list, target_style_key),
+            "text": format_author_date_citation(refs_list, norm_key),
             "is_superscript": False,
             "kind": "author-date"
         }
 
-    if target_style_key == "ieee":
+    if norm_key == "ieee":
         return {
             "text": format_ieee_in_text(nums),
             "is_superscript": False,
             "kind": "bracket"
         }
 
-    if style.get("in_text_kind") == "bracket" or target_style_key == "vancouver-bracket":
+    if style.get("in_text_kind") == "bracket" or norm_key == "vancouver-bracket":
         return {
             "text": f"[{condense_numeric_ranges(nums)}]",
             "is_superscript": False,
             "kind": "bracket"
         }
 
-    if style.get("in_text_kind") == "paren" or target_style_key == "vancouver-paren":
+    if style.get("in_text_kind") == "paren" or norm_key == "vancouver-paren":
         return {
             "text": f"({condense_numeric_ranges(nums)})",
             "is_superscript": False,

@@ -441,7 +441,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
 
         # Open linked document and verify full XML structure
         linked_doc = docx.Document(BytesIO(out_target.getvalue()))
-        self.assertEqual(len(linked_doc.paragraphs), len(paras))
+        from server.parser import get_all_document_paragraphs
+        self.assertEqual(len(get_all_document_paragraphs(linked_doc)), len(paras))
         self.assertGreaterEqual(len(linked_doc.tables), 1)
 
         # Verify tables content is not corrupted
@@ -1889,6 +1890,130 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertGreaterEqual(len(ins_nodes), 1)
         for ins in ins_nodes:
             self.assertEqual(ins.get(qn('w:author')), "Vidhi Dhaduk")
+
+    def test_48_table_cell_citation_detection_and_linking(self):
+        """Verifies that citations inside table cells (<w:tbl><w:tr><w:tc><w:p>) are accurately parsed and linked."""
+        from server.parser import parse_docx_manuscript, get_all_document_paragraphs
+        from server.linker import link_docx_manuscript
+
+        doc = docx.Document()
+        doc.add_paragraph("Prior work established the baseline protocol (1).")
+        
+        # Add table with citation in a cell
+        table = doc.add_table(rows=2, cols=2)
+        table.cell(0, 0).paragraphs[0].text = "Header A"
+        table.cell(0, 1).paragraphs[0].text = "Header B"
+        table.cell(1, 0).paragraphs[0].text = "Observation group"
+        table.cell(1, 1).paragraphs[0].text = "Demonstrated enhanced resolution in cohort analysis (2)."
+
+        doc.add_paragraph("Subsequent findings supported these results (1).")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Alpha A. Baseline Protocol Study. J Radiol 2021.")
+        doc.add_paragraph("2. Beta B. Resolution Analysis. AJNR 2022.")
+
+        in_buf = BytesIO()
+        doc.save(in_buf)
+        in_buf.seek(0)
+
+        # Parse with auto profiling
+        paras, sites, refs = parse_docx_manuscript(in_buf, citation_format="auto")
+        self.assertEqual(len(refs), 2)
+        # Should find 3 citation sites: one in intro (1), one in table cell (2), one after table (1)
+        self.assertEqual(len(sites), 3, "All 3 citation sites including the one in table cell must be captured")
+        
+        table_site = [s for s in sites if 2 in s.nums][0]
+        self.assertIn("cohort analysis", table_site.sentence)
+
+        # Link document
+        out_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            output_target=out_buf,
+            renumber_ama=True,
+            track_changes=False
+        )
+        out_buf.seek(0)
+        linked_doc = docx.Document(out_buf)
+        all_linked_paras = get_all_document_paragraphs(linked_doc)
+        table_para_text = all_linked_paras[table_site.paragraph_idx].text
+        self.assertIn("Demonstrated enhanced resolution", table_para_text)
+        # Check that table paragraph has a native Zotero field injected
+        table_p_el = all_linked_paras[table_site.paragraph_idx]._p
+        fld_chars = table_p_el.xpath('.//w:fldChar')
+        self.assertGreaterEqual(len(fld_chars), 1, "Table cell paragraph must receive Zotero citation field code")
+
+    def test_49_backend_api_target_style_switching(self):
+        """Verifies backend multi-CSL formatting switching (AMA, APA, IEEE, Harvard)."""
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from server.models import ReferenceEntry
+
+        doc = docx.Document()
+        doc.add_paragraph("Recent guidelines recommend multi-sequence screening (1).")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Dhaduk V, Patel R, Smith J. High-field MRI protocols. Neuroimaging. 2023;15(2):100-110.")
+
+        in_buf = BytesIO()
+        doc.save(in_buf)
+        in_buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_buf, citation_format="paren")
+        self.assertEqual(len(refs), 1)
+
+        # Test APA format: In-text should be (Dhaduk et al., 2023)
+        apa_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            output_target=apa_buf,
+            target_style="apa",
+            renumber_ama=False,
+            track_changes=False
+        )
+        apa_buf.seek(0)
+        apa_doc = docx.Document(apa_buf)
+        apa_body_text = " ".join(p.text for p in apa_doc.paragraphs)
+        self.assertIn("Dhaduk et al.", apa_body_text)
+
+        # Test IEEE format: In-text should be [1]
+        ieee_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            output_target=ieee_buf,
+            target_style="ieee",
+            renumber_ama=True,
+            track_changes=False
+        )
+        ieee_buf.seek(0)
+        ieee_doc = docx.Document(ieee_buf)
+        ieee_body_text = " ".join(p.text for p in ieee_doc.paragraphs)
+        self.assertIn("[1]", ieee_body_text)
+
+    def test_50_bounded_jobs_cache_lru_eviction(self):
+        """Verifies that JOBS_CACHE maintains an upper limit of MAX_JOBS_CACHE (50) and evicts oldest items."""
+        from server.main import JOBS_CACHE, store_job, MAX_JOBS_CACHE
+        from server.models import JobRecord, JobStatus
+
+        initial_len = len(JOBS_CACHE)
+        # Add 60 dummy jobs
+        for i in range(60):
+            j = JobRecord(
+                job_id=f"test-job-{i}",
+                status=JobStatus.INITIALIZED,
+                filename=f"test_{i}.docx"
+            )
+            store_job(j)
+
+        self.assertLessEqual(len(JOBS_CACHE), MAX_JOBS_CACHE)
+        self.assertEqual(len(JOBS_CACHE), MAX_JOBS_CACHE)
+        # Oldest jobs (e.g. test-job-0 through test-job-9) should have been evicted
+        self.assertNotIn("test-job-0", JOBS_CACHE)
+        self.assertNotIn("test-job-9", JOBS_CACHE)
+        # Most recent jobs should exist
+        self.assertIn("test-job-59", JOBS_CACHE)
+        self.assertIn("test-job-50", JOBS_CACHE)
 
 if __name__ == "__main__":
     unittest.main()

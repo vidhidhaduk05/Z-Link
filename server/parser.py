@@ -272,6 +272,21 @@ def is_likely_reference_line(line: str) -> bool:
     """Ensure candidate reference line is an authentic bibliographic entry and not a clinical statement or heading."""
     return is_authentic_bibliographic_reference(line)
 
+def get_all_document_paragraphs(doc: Optional[docx.Document]) -> List[docx.text.paragraph.Paragraph]:
+    """
+    Returns all <w:p> paragraphs in document order across the body,
+    including table cells (<w:tbl><w:tr><w:tc><w:p>).
+    python-docx's doc.paragraphs only iterates direct child paragraphs of <w:body>,
+    silently dropping all citations inside tables. This helper guarantees 100% parity
+    with browser DOM traversal (getElementsByTagNameNS(W_NS, 'p')).
+    """
+    if doc is None:
+        return []
+    if not hasattr(doc, '_body') or doc._body is None:
+        return list(getattr(doc, 'paragraphs', []))
+    all_p_elems = doc._body._element.xpath('.//w:p')
+    return [docx.text.paragraph.Paragraph(p_el, doc) for p_el in all_p_elems]
+
 def profile_document_citation_format(
     para_texts: List[str],
     doc: Optional[docx.Document] = None,
@@ -286,9 +301,10 @@ def profile_document_citation_format(
     bracket_count = 0
     paren_count = 0
 
-    if doc is not None:
-        for pi in range(min(scan_end, len(doc.paragraphs))):
-            p_obj = doc.paragraphs[pi]
+    if doc is not None and hasattr(doc, '_body'):
+        all_paras = get_all_document_paragraphs(doc)
+        for pi in range(min(scan_end, len(all_paras))):
+            p_obj = all_paras[pi]
             combined = ""
             active_runs = [docx.text.run.Run(r_el, p_obj) for r_el in p_obj._p.xpath('.//w:r[not(ancestor::w:del)]')]
             spans = []
@@ -397,9 +413,10 @@ def parse_docx_manuscript(
     if accept_revisions and has_tracked_revisions(doc):
         accept_prior_revisions(doc)
     
-    # Extract active text per paragraph without modifying or accepting revisions
+    # Extract active text per paragraph across all body and table paragraphs
+    all_paras = get_all_document_paragraphs(doc)
     para_texts = []
-    for p in doc.paragraphs:
+    for p in all_paras:
         parts = []
         for node in p._p.xpath('.//*[local-name()="t" or local-name()="br"][not(ancestor::*[local-name()="del"])]'):
             if node.tag.endswith('br'):
@@ -483,6 +500,7 @@ def parse_paragraphs_list(
 
     # 4. Extract citation sites
     sites: List[CitationSite] = []
+    all_doc_paras = get_all_document_paragraphs(doc) if (doc is not None and hasattr(doc, '_body')) else None
 
     for pi in range(start_idx, scan_end):
         p_text = para_texts[pi]
@@ -490,8 +508,8 @@ def parse_paragraphs_list(
             continue
 
         # If docx is provided, we can inspect run superscript formatting
-        if doc is not None and pi < len(doc.paragraphs):
-            p_obj = doc.paragraphs[pi]
+        if all_doc_paras is not None and pi < len(all_doc_paras):
+            p_obj = all_doc_paras[pi]
             active_runs = [docx.text.run.Run(r_el, p_obj) for r_el in p_obj._p.xpath('.//w:r[not(ancestor::w:del)]')]
 
             # Coalesce adjacent runs sharing identical superscript status

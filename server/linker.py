@@ -15,6 +15,7 @@ from docx.oxml import parse_xml, OxmlElement
 from docx.oxml.ns import nsdecls, qn
 from lxml import etree
 from server.models import CitationSite, ReferenceEntry, ValidationVerdict
+from server.parser import get_all_document_paragraphs
 from server.csl_formatter import (
     CSL_STYLES,
     parse_author_names,
@@ -144,7 +145,8 @@ def convert_paren_site(
     formatted_text: Optional[str] = None,
     track_changes: bool = False,
     tracker: Optional[RevisionTracker] = None,
-    model_run=None
+    model_run=None,
+    is_superscript: bool = True
 ):
     if model_run is not None:
         r = model_run
@@ -159,18 +161,22 @@ def convert_paren_site(
 
     text = r.text
     before, cited, after = text[:match_start], text[match_start:match_end], text[match_end:]
-    if before.endswith(' '):
-        before = before[:-1]
-    sup_text = formatted_text if formatted_text is not None else ','.join(part.replace('–', '-').replace(' ', '')
-                        for part in cited[1:-1].split(','))
-    lead_punct = ''
-    if after and after[0] in '.,;:':
-        lead_punct, after = after[0], after[1:]
-    r.text = before + lead_punct
+    if is_superscript:
+        if before.endswith(' '):
+            before = before[:-1]
+        sup_text = formatted_text if formatted_text is not None else ','.join(part.replace('–', '-').replace(' ', '')
+                            for part in cited[1:-1].split(','))
+        lead_punct = ''
+        if after and after[0] in '.,;:':
+            lead_punct, after = after[0], after[1:]
+        r.text = before + lead_punct
+    else:
+        sup_text = formatted_text if formatted_text is not None else cited
+        r.text = before
 
     if track_changes and tracker:
         del_el = make_del_element(cited, tracker.next_id(), tracker.author, tracker.date_str, model_run=r)
-        ins_el = make_ins_element(sup_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=True, model_run=r)
+        ins_el = make_ins_element(sup_text, tracker.next_id(), tracker.author, tracker.date_str, is_superscript=is_superscript, model_run=r)
         
         parent = r._r.getparent()
         if parent is not None and parent.tag == qn('w:ins'):
@@ -197,11 +203,14 @@ def convert_paren_site(
                 ins_el.addnext(make_text_run(r, after))
             return ins_el
     else:
-        sup_r = make_sup_run(r, sup_text)
-        r._r.addnext(sup_r)
+        if is_superscript:
+            new_r = make_sup_run(r, sup_text)
+        else:
+            new_r = make_text_run(r, sup_text)
+        r._r.addnext(new_r)
         if after:
-            sup_r.addnext(make_text_run(r, after))
-        return sup_r
+            new_r.addnext(make_text_run(r, after))
+        return new_r
 
 def format_condensed_citation(nums: List[int]) -> str:
     """
@@ -298,8 +307,11 @@ def split_multiline_reference_paragraphs(doc, start_idx: int, end_idx: int) -> T
     """
     current_end = end_idx
     i = start_idx
-    while i < current_end and i < len(doc.paragraphs):
-        p = doc.paragraphs[i]
+    while True:
+        all_paras = get_all_document_paragraphs(doc)
+        if i >= current_end or i >= len(all_paras):
+            break
+        p = all_paras[i]
         lines = [line.strip() for line in re.split(r'\r?\n', p.text) if line.strip()]
         ref_matches = [REF_START_RE.match(l) for l in lines]
         valid_ref_count = sum(1 for m in ref_matches if m is not None)
@@ -325,19 +337,21 @@ class AtomicReferenceBlock:
         self.old_prefix = old_prefix
         self.paragraphs = [primary_para]
 
-def find_reference_section_bounds(doc) -> Tuple[Optional[int], int, int]:
+def find_reference_section_bounds(doc, all_paras: Optional[List] = None) -> Tuple[Optional[int], int, int]:
     """
-    Locates the reference section in doc.paragraphs.
+    Locates the reference section in the document's paragraphs.
     Returns (header_idx, start_idx, end_idx) where:
     - header_idx: index of the 'REFERENCES' paragraph (or None if not found)
     - start_idx: index of the first reference paragraph
     - end_idx: index after the last reference paragraph (exclusive boundary)
     """
+    if all_paras is None:
+        all_paras = get_all_document_paragraphs(doc)
     header_idx = None
     start_idx = None
     end_idx = None
 
-    for i, p in enumerate(doc.paragraphs):
+    for i, p in enumerate(all_paras):
         txt = p.text.strip()
         if REF_HEADER_RE.match(txt):
             header_idx = i
@@ -345,7 +359,7 @@ def find_reference_section_bounds(doc) -> Tuple[Optional[int], int, int]:
             break
 
     if start_idx is None:
-        for i, p in enumerate(doc.paragraphs):
+        for i, p in enumerate(all_paras):
             txt = p.text.strip()
             m = REF_START_RE.match(txt)
             if m and int(m.group(1)) == 1:
@@ -355,16 +369,16 @@ def find_reference_section_bounds(doc) -> Tuple[Optional[int], int, int]:
                     break
 
     if start_idx is None:
-        return None, 0, len(doc.paragraphs)
+        return None, 0, len(all_paras)
 
-    for i in range(start_idx, len(doc.paragraphs)):
-        txt = doc.paragraphs[i].text.strip()
+    for i in range(start_idx, len(all_paras)):
+        txt = all_paras[i].text.strip()
         if POST_REF_HEADER_RE.match(txt):
             end_idx = i
             break
 
     if end_idx is None:
-        end_idx = len(doc.paragraphs)
+        end_idx = len(all_paras)
 
     return header_idx, start_idx, end_idx
 
@@ -403,7 +417,7 @@ def strip_existing_bibliography_fields(doc):
     so re-injecting does not create nested, duplicated, or corrupted field markers.
     """
     bibl_found = False
-    for p in doc.paragraphs:
+    for p in get_all_document_paragraphs(doc):
         p_el = p._p
         instrs = p_el.xpath('.//w:instrText[contains(text(), "ZOTERO_BIBL")]')
         if instrs:
@@ -441,7 +455,7 @@ def strip_existing_bibliography_fields(doc):
                     parent.remove(r)
 
     if bibl_found:
-        for p in doc.paragraphs:
+        for p in get_all_document_paragraphs(doc):
             p_el = p._p
             if not p.text.strip():
                 end_chars = p_el.xpath('.//w:fldChar[@w:fldCharType="end"]')
@@ -458,8 +472,9 @@ def inject_bibliography_field(doc, target_para=None, last_para=None, *args, **kw
     2. Reference entries reside inside the field
     3. Trailing paragraph receives: end
     """
-    if target_para is None and len(doc.paragraphs) > 0:
-        target_para = doc.paragraphs[-1]
+    all_paras = get_all_document_paragraphs(doc)
+    if target_para is None and len(all_paras) > 0:
+        target_para = all_paras[-1]
     if target_para is None:
         return
 
@@ -499,7 +514,8 @@ def inject_doc_prefs(doc, style_id=DEFAULT_STYLE, style_name=DEFAULT_STYLE_NAME,
         "bibliographyStyle": 0
     }
     instr = "ADDIN ZOTERO_PREF_1 " + json.dumps(prefs, ensure_ascii=False)
-    first_p = doc.paragraphs[0]._p
+    all_paras = get_all_document_paragraphs(doc)
+    first_p = all_paras[0]._p if all_paras else doc.paragraphs[0]._p
     pPr = first_p.find(qn('w:pPr'))
     prev = pPr
     for e in (fld_run('begin'), fld_run('instr', instr), fld_run('separate'), fld_run('end')):
@@ -590,11 +606,12 @@ def link_docx_manuscript(
             rec["id"] = f"ITEM-{new_n}"
             csl_by_new_num[new_n] = rec
 
+    all_paras = get_all_document_paragraphs(doc)
     # Process citation sites in reverse order so paragraph run indices remain valid
     for s in reversed(sites):
-        if s.paragraph_idx >= len(doc.paragraphs):
+        if s.paragraph_idx >= len(all_paras):
             continue
-        p = doc.paragraphs[s.paragraph_idx]
+        p = all_paras[s.paragraph_idx]
 
         # Calculate new numbers and format for target style
         new_site_nums = sorted(list(set(mapping.get(n, n) for n in s.nums)))
@@ -614,6 +631,7 @@ def link_docx_manuscript(
                 sup_el = convert_paren_site(
                     p, s.run_idx, s.match_start, s.match_end,
                     formatted_text=formatted_str,
+                    is_superscript=is_sup,
                     track_changes=track_changes,
                     tracker=tracker,
                     model_run=active_runs[s.run_idx]
@@ -684,7 +702,8 @@ def link_docx_manuscript(
     # Reorder and renumber bibliography paragraphs in the Word XML
     header_idx, start_idx, end_idx = find_reference_section_bounds(doc)
     start_idx, end_idx = split_multiline_reference_paragraphs(doc, start_idx, end_idx)
-    candidate_paras = doc.paragraphs[start_idx:end_idx]
+    all_paras = get_all_document_paragraphs(doc)
+    candidate_paras = all_paras[start_idx:end_idx]
     blocks = extract_atomic_reference_blocks(candidate_paras, mapping)
 
     if blocks:
@@ -862,8 +881,8 @@ def link_docx_manuscript(
 
         if len(blocks) > 0:
             # Find the anchor element immediately preceding the reference section
-            if header_idx is not None and header_idx < len(doc.paragraphs):
-                anchor_el = doc.paragraphs[header_idx]._p
+            if header_idx is not None and header_idx < len(all_paras):
+                anchor_el = all_paras[header_idx]._p
             else:
                 anchor_el = blocks[0].paragraphs[0]._p.getprevious()
 
@@ -888,8 +907,8 @@ def link_docx_manuscript(
         elif blocks:
             last_ref_para = blocks[-1].paragraphs[-1]
 
-        if header_idx is not None and header_idx < len(doc.paragraphs):
-            inject_bibliography_field(doc, doc.paragraphs[header_idx], last_para=last_ref_para)
+        if header_idx is not None and header_idx < len(all_paras):
+            inject_bibliography_field(doc, all_paras[header_idx], last_para=last_ref_para)
         elif blocks:
             inject_bibliography_field(doc, blocks[0].primary_para, last_para=last_ref_para)
 

@@ -1,5 +1,5 @@
 """
-Domain models and schemas for Co-Scientist Reference Auditor & Zotero Linker.
+Domain models and schemas for Vidhi Dhaduk Reference Auditor & Zotero Linker.
 """
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
@@ -109,6 +109,7 @@ class JobRecord(BaseModel):
     linked_bytes: Optional[bytes] = None
     tracked_bytes: Optional[bytes] = None
     ris_text: Optional[str] = None
+    target_style: str = "ama"
     error_message: Optional[str] = None
 
     def transition_to(self, target_status: JobStatus):

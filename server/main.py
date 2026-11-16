@@ -1,8 +1,9 @@
 """
-FastAPI Server for Co-Scientist Reference Auditor & Zotero Linker.
+FastAPI Server for Vidhi Dhaduk Reference Auditor & Zotero Linker.
 """
 import os
 import uuid
+from collections import OrderedDict
 from io import BytesIO
 from typing import Dict, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -41,7 +42,17 @@ def serve_index():
         return FileResponse(index_path)
     return {"message": "Vidhi Dhaduk Reference Auditor API is running."}
 
-JOBS_CACHE: Dict[str, JobRecord] = {}
+MAX_JOBS_CACHE = 50
+JOBS_CACHE: OrderedDict[str, JobRecord] = OrderedDict()
+
+def store_job(job: JobRecord) -> None:
+    """Store job in bounded LRU cache evicting oldest entry if over capacity."""
+    if job.job_id in JOBS_CACHE:
+        JOBS_CACHE.move_to_end(job.job_id)
+    else:
+        if len(JOBS_CACHE) >= MAX_JOBS_CACHE:
+            JOBS_CACHE.popitem(last=False)
+    JOBS_CACHE[job.job_id] = job
 
 def execute_job_linking(job: JobRecord):
     """Guarded execution of linking for a job."""
@@ -52,6 +63,7 @@ def execute_job_linking(job: JobRecord):
         raise HTTPException(status_code=409, detail=f"Job cannot be linked in status '{job.status.value}'")
 
     job.transition_to(JobStatus.LINKING)
+    style_key = getattr(job, "target_style", "ama") or "ama"
     try:
         clean_stream = BytesIO()
         link_docx_manuscript(
@@ -60,6 +72,7 @@ def execute_job_linking(job: JobRecord):
             references=job.references,
             verdicts=job.verdicts,
             output_target=clean_stream,
+            target_style=style_key,
             renumber_ama=True,
             track_changes=False,
             mappings=job.mappings,
@@ -74,6 +87,7 @@ def execute_job_linking(job: JobRecord):
             references=job.references,
             verdicts=job.verdicts,
             output_target=tracked_stream,
+            target_style=style_key,
             renumber_ama=True,
             track_changes=True,
             author="Vidhi Dhaduk",
@@ -100,14 +114,20 @@ def health():
 async def audit_manuscript(
     file: Optional[UploadFile] = File(None),
     text_content: Optional[str] = Form(None),
-    citation_format: str = Form("auto")
+    citation_format: str = Form("auto"),
+    target_style: str = Form("ama")
 ):
     job_id = str(uuid.uuid4())
     filename = "manuscript.docx"
     file_bytes = None
 
-    job = JobRecord(job_id=job_id, status=JobStatus.INITIALIZED, filename=filename)
-    JOBS_CACHE[job_id] = job
+    job = JobRecord(
+        job_id=job_id,
+        status=JobStatus.INITIALIZED,
+        filename=filename,
+        target_style=target_style
+    )
+    store_job(job)
     job.transition_to(JobStatus.PARSING)
 
     if file:
@@ -193,6 +213,7 @@ async def link_manuscript(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found or expired.")
     
     job = JOBS_CACHE[job_id]
+    JOBS_CACHE.move_to_end(job_id)
     execute_job_linking(job)
 
     return {
@@ -210,6 +231,7 @@ def download_docx(job_id: str, mode: Optional[str] = None):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     job = JOBS_CACHE[job_id]
+    JOBS_CACHE.move_to_end(job_id)
     if job.status == JobStatus.AUDITED:
         execute_job_linking(job)
     elif job.status == JobStatus.ERROR:
@@ -217,12 +239,13 @@ def download_docx(job_id: str, mode: Optional[str] = None):
     elif job.status != JobStatus.READY:
         raise HTTPException(status_code=409, detail=f"Job is not ready. Status: {job.status.value}")
 
+    style_tag = f"_{job.target_style}" if getattr(job, "target_style", "ama") != "ama" else ""
     if mode == "tracked" and job.tracked_bytes:
         content = job.tracked_bytes
-        suffix = "tracked_changes"
+        suffix = f"tracked_changes{style_tag}"
     elif job.linked_bytes:
         content = job.linked_bytes
-        suffix = "zotero_linked"
+        suffix = f"zotero_linked{style_tag}"
     else:
         raise HTTPException(status_code=404, detail="Linked file not ready.")
 
@@ -241,6 +264,7 @@ def download_tracked_docx(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     job = JOBS_CACHE[job_id]
+    JOBS_CACHE.move_to_end(job_id)
     if job.status == JobStatus.AUDITED:
         execute_job_linking(job)
     elif job.status == JobStatus.ERROR:
@@ -253,7 +277,8 @@ def download_tracked_docx(job_id: str):
 
     orig_name = job.filename
     base = os.path.splitext(orig_name)[0]
-    out_name = f"{base}_tracked_changes.docx"
+    style_tag = f"_{job.target_style}" if getattr(job, "target_style", "ama") != "ama" else ""
+    out_name = f"{base}_tracked_changes{style_tag}.docx"
     return Response(
         content=job.tracked_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -266,6 +291,7 @@ def download_ris(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found.")
     
     job = JOBS_CACHE[job_id]
+    JOBS_CACHE.move_to_end(job_id)
     if job.status == JobStatus.AUDITED:
         execute_job_linking(job)
 
@@ -282,6 +308,7 @@ def download_report(job_id: str):
     if job_id not in JOBS_CACHE:
         raise HTTPException(status_code=404, detail="Job not found.")
     job = JOBS_CACHE[job_id]
+    JOBS_CACHE.move_to_end(job_id)
     summary: AuditSummary = job.summary
 
     lines = [

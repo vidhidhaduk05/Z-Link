@@ -1,5 +1,5 @@
 /**
- * Co-Scientist Reference Auditor & Zotero Linker: Main UI Controller
+ * Vidhi Dhaduk Reference Auditor & Zotero Linker: Main UI Controller
  * Implements Ponytail Guarded State Machine and Master Theme interactions.
  */
 
