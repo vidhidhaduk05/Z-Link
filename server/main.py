@@ -17,7 +17,7 @@ from server.ris_generator import generate_ris
 from server.linker import link_docx_manuscript, build_ama_renumbering_map
 
 app = FastAPI(
-    title="Co-Scientist Reference Auditor & Zotero Linker",
+    title="Vidhi Dhaduk Reference Auditor & Zotero Linker",
     description="Live reference reachability verification, in-manuscript citation mapping, and native Zotero field injection.",
     version="1.0.0"
 )
@@ -39,14 +39,7 @@ def serve_index():
     index_path = os.path.join(os.path.dirname(__file__), "..", "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return {"message": "Co-Scientist Reference Auditor API is running."}
-
-@app.get("/sample_radiology_manuscript.docx")
-def serve_sample_doc():
-    sample_path = os.path.join(os.path.dirname(__file__), "..", "sample_radiology_manuscript.docx")
-    if os.path.exists(sample_path):
-        return FileResponse(sample_path)
-    raise HTTPException(status_code=404, detail="Sample manuscript not found.")
+    return {"message": "Vidhi Dhaduk Reference Auditor API is running."}
 
 JOBS_CACHE: Dict[str, JobRecord] = {}
 
@@ -70,7 +63,7 @@ def execute_job_linking(job: JobRecord):
             renumber_ama=True,
             track_changes=False,
             mappings=job.mappings,
-            include_audit_ledger=True
+            include_audit_ledger=False
         )
         job.linked_bytes = clean_stream.getvalue()
 
@@ -83,9 +76,9 @@ def execute_job_linking(job: JobRecord):
             output_target=tracked_stream,
             renumber_ama=True,
             track_changes=True,
-            author="Co-Scientist",
+            author="Vidhi Dhaduk",
             mappings=job.mappings,
-            include_audit_ledger=True
+            include_audit_ledger=False
         )
         job.tracked_bytes = tracked_stream.getvalue()
         job.ris_text = generate_ris(job.references, job.verdicts, mapping=job.mapping)
@@ -99,7 +92,7 @@ def execute_job_linking(job: JobRecord):
 def health():
     return {
         "status": "healthy",
-        "service": "Co-Scientist Reference Auditor & Zotero Linker",
+        "service": "Vidhi Dhaduk Reference Auditor & Zotero Linker",
         "version": "1.0.0"
     }
 
@@ -292,7 +285,7 @@ def download_report(job_id: str):
     summary: AuditSummary = job.summary
 
     lines = [
-        f"# Co-Scientist Reference Audit Report: {summary.filename}",
+        f"# Vidhi Dhaduk Reference Audit Report: {summary.filename}",
         f"**Status:** {'PASS' if summary.consecutive_order_valid and summary.total_broken == 0 else 'ATTENTION REQUIRED'}",
         f"- Total In-Text Citation Sites: {summary.total_citations}",
         f"- Total Bibliography References: {summary.total_references}",
@@ -331,16 +324,3 @@ def download_report(job_id: str):
         media_type="text/markdown",
         headers={"Content-Disposition": f'attachment; filename="{base}_audit_report.md"'}
     )
-
-@app.get("/api/sample")
-def get_sample_manuscript():
-    sample_path = "sample_radiology_manuscript.docx"
-    if os.path.exists(sample_path):
-        with open(sample_path, "rb") as f:
-            bytes_data = f.read()
-        return Response(
-            content=bytes_data,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": 'attachment; filename="sample_radiology_manuscript.docx"'}
-        )
-    raise HTTPException(status_code=404, detail="Sample manuscript file not generated yet.")

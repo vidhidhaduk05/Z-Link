@@ -347,6 +347,26 @@
   - Python Unit Tests: All 46/46 unit tests in `tests/test_engine.py` pass with 100% success in 6.88s (0 failures, 0 skips).
   - Headless Chrome CDP Live Test: Empirically verified live in Chrome (43 references, 12 citation sites, APA dynamic switching, clinical count immunity, alphabetical sorting, AJNR docx generation, and clean reset).
 
+### [2026-11-16 09:40] ARCH-DECISION-024: Purge Reference Audit Table from Output Word Document and Re-attribution to "Vidhi Dhaduk"
+- **Context**: User requested: *"what did you do yocannot add the refrence audit table at the end !!!!!!!!!!!!!!!!!!!!!! we always need a clean copy, aso name it "Vidhi Dhaduk" not co-scientist u"*.
+- **Technical Actions**:
+  1. **Purged In-Document Audit Ledger Table**:
+     - The output `.docx` manuscript must strictly remain a clean copy with only manuscript body text and formatted bibliography.
+     - Changed default `include_audit_ledger = False` in `server/linker.py:link_docx_manuscript` and `includeAuditLedger = false` in `static/js/docx_engine.js:injectZoteroFieldsInBrowser`.
+     - Explicitly disabled audit ledger generation in `static/js/app.js` download handlers (`btnDownloadDocx`, `btnDownloadTrackedDocx`) and in `server/main.py:execute_job_linking`.
+     - Audit reporting remains available in the interactive UI explorer, printable modal, and downloadable text/markdown reports, without contaminating manuscript files.
+  2. **Revision Tracking & Platform Re-attribution to "Vidhi Dhaduk"**:
+     - Word Track Changes revision tags (`<w:ins w:author="...">` and `<w:del w:author="...">`) now strictly use `author = "Vidhi Dhaduk"` across both backend (`server/linker.py`) and browser engine (`static/js/docx_engine.js`).
+     - Updated UI masthead headline, title tag, newspaper meta bar, report modal, credit footers, FastAPI title, root route response, health endpoint, launcher banners, and README to "Vidhi Dhaduk Reference Auditor & Zotero Linker".
+  3. **Complete Elimination of Sample Manuscript Files**:
+     - Purged `sample_radiology_manuscript.docx`, `sample_radiology_linked.docx`, and `tests/create_sample_docx.py` from repository tracking and disk.
+     - Removed backend routes `@app.get("/sample_radiology_manuscript.docx")` and `@app.get("/api/sample")` from `server/main.py`.
+     - Replaced all disk test fixtures in `tests/test_engine.py` with in-memory `build_synthetic_sample_manuscript() -> BytesIO` generator.
+- **Verification**:
+  - Python Unit Tests: Added `test_47_clean_copy_has_zero_audit_tables_by_default` in `tests/test_engine.py`; all 47/47 unit tests pass.
+  - Headless Chrome CDP Live Test: Empirically verified via `scripts/verify_csl_switching_live.py` that the exported `.docx` contains zero audit tables, author tags are `Vidhi Dhaduk`, and sample/ACTA2 buttons remain eliminated.
+
+
 
 
 

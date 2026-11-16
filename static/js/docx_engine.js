@@ -723,7 +723,7 @@ function stripExistingBibliographyFields(xmlDoc) {
   }
 }
 
-function createDelRun(doc, text, revId, author = "Co-Scientist", dateStr = null, isSuperscript = false) {
+function createDelRun(doc, text, revId, author = "Vidhi Dhaduk", dateStr = null, isSuperscript = false) {
   const delEl = doc.createElementNS(W_NS, "w:del");
   delEl.setAttributeNS(W_NS, "w:id", String(revId));
   delEl.setAttributeNS(W_NS, "w:author", author);
@@ -745,7 +745,7 @@ function createDelRun(doc, text, revId, author = "Co-Scientist", dateStr = null,
   return delEl;
 }
 
-function createInsRun(doc, text, revId, author = "Co-Scientist", dateStr = null, isSuperscript = false) {
+function createInsRun(doc, text, revId, author = "Vidhi Dhaduk", dateStr = null, isSuperscript = false) {
   const insEl = doc.createElementNS(W_NS, "w:ins");
   insEl.setAttributeNS(W_NS, "w:id", String(revId));
   insEl.setAttributeNS(W_NS, "w:author", author);
@@ -879,7 +879,7 @@ function appendAuditLedgerToDocx(xmlDoc, parsedData, verdicts, amaMapping) {
   rHead.appendChild(rPrHead);
 
   const tHead = xmlDoc.createElementNS(W_NS, "w:t");
-  tHead.textContent = "Co-Scientist Reference Audit & Reachability Ledger";
+  tHead.textContent = "Vidhi Dhaduk Reference Audit & Reachability Ledger";
   rHead.appendChild(tHead);
   pHead.appendChild(rHead);
   insertNode(pHead);
@@ -1053,8 +1053,8 @@ export async function injectZoteroFieldsInBrowser(
   verdicts = {},
   renumberAma = true,
   trackChanges = false,
-  author = "Co-Scientist",
-  includeAuditLedger = true,
+  author = "Vidhi Dhaduk",
+  includeAuditLedger = false,
   targetStyle = "ama"
 ) {
   const { zip, xmlDoc, paragraphs, sites, references } = parsedData;

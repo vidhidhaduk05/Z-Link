@@ -75,6 +75,7 @@ async def run_verification():
 
             title = await eval_js(ws, "document.title")
             print(f"Page title: {title}")
+            assert "Vidhi Dhaduk" in title, f"Title must contain 'Vidhi Dhaduk', got: {title}"
 
             # Generate and upload synthetic clinical manuscript via File API
             print("Generating and uploading synthetic clinical manuscript via File API...")
@@ -302,8 +303,8 @@ async def run_verification():
                         window.appState.verdicts,
                         true,
                         false,
-                        "Co-Scientist",
-                        true,
+                        "Vidhi Dhaduk",
+                        false,
                         "ajnr"
                     );
                     const buf = await blob.arrayBuffer();
@@ -322,7 +323,9 @@ async def run_verification():
             doc_ajnr_xml = doc_ajnr._part._element.xml
             assert "american-journal-of-neuroradiology" in doc_ajnr_xml, "Generated docx must configure AJNR style ID"
             assert "ADDIN ZOTERO_BIBL" in doc_ajnr_xml
-            print("✓ AJNR Docx OpenXML verified: american-journal-of-neuroradiology style ID confirmed.")
+            assert len(doc_ajnr.tables) == 1, f"Document should only contain the manuscript's original 1 table, got {len(doc_ajnr.tables)}"
+            assert "Reference Audit & Reachability Ledger" not in doc_ajnr_xml, "Output docx must NOT contain Reference Audit table!"
+            print("✓ AJNR Docx OpenXML verified: american-journal-of-neuroradiology style ID confirmed, ZERO audit tables appended.")
 
             # ---------------- TEST REMOVAL OF EXAMPLE & ACTA2 MANUSCRIPT BUTTONS & CLEAR ACTION ----------------
             print("\n--- Verifying Removal of Example & ACTA2 Manuscript Buttons & Clear Action ---")

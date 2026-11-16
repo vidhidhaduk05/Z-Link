@@ -29,7 +29,7 @@ CSL_CITATION_SCHEMA = "https://github.com/citation-style-language/schema/raw/mas
 
 class RevisionTracker:
     """Manages unique revision IDs and author attribution for Word OpenXML Track Changes."""
-    def __init__(self, author: str = "Co-Scientist", date_str: Optional[str] = None):
+    def __init__(self, author: str = "Vidhi Dhaduk", date_str: Optional[str] = None):
         self.author = author
         self.date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._current_id = 1
@@ -39,7 +39,7 @@ class RevisionTracker:
         self._current_id += 1
         return res
 
-def make_del_element(text: str, rev_id: str, author: str = "Co-Scientist", date_str: Optional[str] = None, is_superscript: bool = False, model_run=None):
+def make_del_element(text: str, rev_id: str, author: str = "Vidhi Dhaduk", date_str: Optional[str] = None, is_superscript: bool = False, model_run=None):
     """Creates a native OpenXML <w:del> element with <w:delText>."""
     del_el = etree.Element(qn('w:del'))
     del_el.set(qn('w:id'), rev_id)
@@ -67,7 +67,7 @@ def make_del_element(text: str, rev_id: str, author: str = "Co-Scientist", date_
     del_el.append(r)
     return del_el
 
-def make_ins_element(text: str, rev_id: str, author: str = "Co-Scientist", date_str: Optional[str] = None, is_superscript: bool = False, model_run=None):
+def make_ins_element(text: str, rev_id: str, author: str = "Vidhi Dhaduk", date_str: Optional[str] = None, is_superscript: bool = False, model_run=None):
     """Creates a native OpenXML <w:ins> element with <w:t>."""
     ins_el = etree.Element(qn('w:ins'))
     ins_el.set(qn('w:id'), rev_id)
@@ -558,7 +558,7 @@ def append_audit_ledger_to_docx(
     p_head = doc.add_paragraph()
     p_head.paragraph_format.space_before = Pt(24)
     p_head.paragraph_format.space_after = Pt(4)
-    r_head = p_head.add_run("Co-Scientist Reference Audit & Reachability Ledger")
+    r_head = p_head.add_run("Vidhi Dhaduk Reference Audit & Reachability Ledger")
     r_head.bold = True
     r_head.font.size = Pt(13)
     r_head.font.color.rgb = RGBColor(0x3A, 0x0F, 0x34)  # Primary Wine
@@ -655,7 +655,7 @@ def link_docx_manuscript(
     output_target: Optional[Union[str, BytesIO]] = None,
     renumber_ama: bool = True,
     track_changes: bool = False,
-    author: str = "Co-Scientist",
+    author: str = "Vidhi Dhaduk",
     mappings: Optional[Dict[int, Any]] = None,
     include_audit_ledger: bool = False,
     target_style: str = "ama"

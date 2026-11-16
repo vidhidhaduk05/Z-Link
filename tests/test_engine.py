@@ -8,6 +8,7 @@ import docx
 import re
 from io import BytesIO
 from lxml import etree
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -103,8 +104,62 @@ def build_synthetic_clinical_manuscript() -> BytesIO:
     buf.seek(0)
     return buf
 
+def add_superscript_run(paragraph, text):
+    run = paragraph.add_run(text)
+    rPr = run._r.get_or_add_rPr()
+    va = OxmlElement('w:vertAlign')
+    va.set(qn('w:val'), 'superscript')
+    rPr.append(va)
+    return run
+
+def build_synthetic_sample_manuscript() -> BytesIO:
+    """Builds a hermetic 5-reference radiology manuscript for unit tests."""
+    doc = docx.Document()
+    
+    # Title & Front Matter
+    doc.add_heading("Deep Learning Diagnostic Evaluation in Pulmonary Imaging", level=1)
+    doc.add_paragraph("Jane Doe, MD1; John Smith, PhD2; Alice Johnson, MD1")
+    doc.add_paragraph("Department of Radiology, Academic Medical Center. Corresponding author: jdoe@example.org")
+    
+    # Abstract
+    doc.add_heading("ABSTRACT", level=2)
+    doc.add_paragraph("Automated feature extraction and multi-reader validation are critical for reproducible medical imaging analysis (1, 2). Here we benchmark deep convolutional representations against multi-center clinical cohorts.")
+
+    # Introduction
+    doc.add_heading("INTRODUCTION", level=2)
+    doc.add_paragraph("Clinical image interpretation has increasingly integrated algorithmic feature quantification to reduce inter-observer variability (1). Modern computational frameworks allow large-scale multidimensional matrix evaluations across clinical cohorts (2, 3).")
+    
+    # Methods
+    doc.add_heading("METHODS", level=2)
+    doc.add_paragraph("Array computations were processed using high-performance vector operations (1). Multi-reader adjudication was performed following standardized diagnostic criteria. Initial patient stratification protocols were adapted from established viral diagnostic studies (2). Model architectures were refined using automated neural network tuning.")
+    
+    p_meth2 = doc.add_paragraph("Statistical hypothesis testing was conducted with a two-tailed alpha of 0.05. Previous studies reported sensitivity gains of up to 14%")
+    add_superscript_run(p_meth2, "3")
+    p_meth2.add_run(". We also evaluated historical benchmark datasets")
+    add_superscript_run(p_meth2, "4,5")
+    p_meth2.add_run(" across three academic imaging centers.")
+
+    # Results
+    doc.add_heading("RESULTS", level=2)
+    doc.add_paragraph("The overall sensitivity reached 94.2% (95% CI: 91.5-96.1%). Model performance remained consistent across internal and external validation splits (1, 3).")
+
+    # References
+    doc.add_heading("REFERENCES", level=2)
+    doc.add_paragraph("1. Harris CR, Millman KJ, van der Walt SJ, et al. Array programming with NumPy. Nature. 2020;585(7825):357-362. doi: 10.1038/s41586-020-2649-2")
+    doc.add_paragraph("2. Guan WJ, Ni ZY, Hu Y, et al. Clinical Characteristics of Coronavirus Disease 2019 in China. N Engl J Med. 2020;382(18):1708-1720. doi: 10.1056/NEJMoa2002032")
+    doc.add_paragraph("3. McKinney SM, Sieniek M, Godbole V, et al. International evaluation of an AI system for breast cancer screening. Nature. 2020;577(7788):89-94. doi: 10.1038/s41586-019-1799-6")
+    doc.add_paragraph("4. Fictitious Author, Broken Journal. Phantom study with invalid DOI. Phantom Radiol. 2022;1(1):10-15. doi: 10.1148/broken.invalid.doi.99999")
+    doc.add_paragraph("5. Topol EJ. High-performance medicine: the convergence of human and artificial intelligence. Nat Med. 2019;25(1):44-56. doi: 10.1038/s41591-018-0300-7")
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
 class TestZoteroLinkEngine(unittest.TestCase):
-    docx_file = "sample_radiology_manuscript.docx"
+    @property
+    def docx_file(self):
+        return build_synthetic_sample_manuscript()
 
     def test_01_parser(self):
         paras, sites, references = parse_docx_manuscript(self.docx_file)
@@ -120,7 +175,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertTrue({1, 2, 3, 4, 5}.issubset(all_cited_nums), "All references 1-5 should be cited")
 
     def test_02_usage_mapping(self):
-        paras, sites, references = parse_docx_manuscript(self.docx_file)
+        buf = build_synthetic_sample_manuscript()
+        paras, sites, references = parse_docx_manuscript(buf)
         ref_map, seq_valid, warnings = map_usage_and_sequence(references, sites)
         self.assertTrue(seq_valid, "Initial citations should be in consecutive order")
         self.assertIn(1, ref_map)
@@ -128,7 +184,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertTrue(len(ref_map[1].first_mention_sentence) > 10)
 
     def test_03_reachability_and_broken_detection(self):
-        paras, sites, references = parse_docx_manuscript(self.docx_file)
+        buf = build_synthetic_sample_manuscript()
+        paras, sites, references = parse_docx_manuscript(buf)
         
         # Ref 1 is NumPy (Valid Nature DOI)
         v1 = validate_single_reference(references[0])
@@ -142,20 +199,23 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(v4.status, "unreachable")
 
     def test_04_ris_generation(self):
-        paras, sites, references = parse_docx_manuscript(self.docx_file)
+        buf = build_synthetic_sample_manuscript()
+        paras, sites, references = parse_docx_manuscript(buf)
         ris_text = generate_ris(references)
         self.assertIn("TY  - JOUR", ris_text)
         self.assertIn("10.1038/s41586-020-2649-2", ris_text)
         self.assertIn("ER  - ", ris_text)
 
     def test_05_docx_linking(self):
-        paras, sites, references = parse_docx_manuscript(self.docx_file)
-        out_file = "sample_radiology_linked.docx"
-        link_docx_manuscript(self.docx_file, sites, references, output_target=out_file)
-        self.assertTrue(os.path.exists(out_file))
+        buf = build_synthetic_sample_manuscript()
+        paras, sites, references = parse_docx_manuscript(buf)
+        buf.seek(0)
+        out_buf = BytesIO()
+        link_docx_manuscript(buf, sites, references, output_target=out_buf)
+        out_buf.seek(0)
 
         # Inspect resulting XML for Zotero field instructions
-        out_doc = docx.Document(out_file)
+        out_doc = docx.Document(out_buf)
         xml_str = "".join([p._p.xml for p in out_doc.paragraphs])
         self.assertIn("ADDIN ZOTERO_ITEM", xml_str, "Output must contain native ZOTERO_ITEM fields")
         self.assertIn("ADDIN ZOTERO_BIBL", xml_str, "Output must contain ZOTERO_BIBL field")
@@ -661,7 +721,7 @@ class TestZoteroLinkEngine(unittest.TestCase):
             output_target=out_stream,
             renumber_ama=True,
             track_changes=True,
-            author="Co-Scientist"
+            author="Vidhi Dhaduk"
         )
         out_stream.seek(0)
 
@@ -674,8 +734,8 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertGreaterEqual(len(ins_els), 1, "Must contain <w:ins> for new citation 1")
 
         # Verify author attribute
-        self.assertEqual(del_els[0].get(qn('w:author')), "Co-Scientist")
-        self.assertEqual(ins_els[0].get(qn('w:author')), "Co-Scientist")
+        self.assertEqual(del_els[0].get(qn('w:author')), "Vidhi Dhaduk")
+        self.assertEqual(ins_els[0].get(qn('w:author')), "Vidhi Dhaduk")
 
         # Verify delText contains '[3]'
         del_text_el = del_els[0].find(f".//{qn('w:delText')}")
@@ -726,7 +786,7 @@ class TestZoteroLinkEngine(unittest.TestCase):
             output_target=out_stream,
             renumber_ama=True,
             track_changes=True,
-            author="Co-Scientist"
+            author="Vidhi Dhaduk"
         )
         out_stream.seek(0)
 
@@ -1045,10 +1105,10 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertEqual(len(refs), 1)
         self.assertEqual(len(sites), 1)
 
-        # Link document with track_changes=True (author='Co-Scientist')
+        # Link document with track_changes=True (author='Vidhi Dhaduk')
         buf.seek(0)
         out_buf = BytesIO()
-        link_docx_manuscript(buf, sites, refs, output_target=out_buf, track_changes=True, author="Co-Scientist")
+        link_docx_manuscript(buf, sites, refs, output_target=out_buf, track_changes=True, author="Vidhi Dhaduk")
         out_buf.seek(0)
 
         out_doc = docx.Document(out_buf)
@@ -1060,11 +1120,11 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertGreaterEqual(len(reviewer_inss), 1, "Reviewer 1 insertion must not be accepted or removed")
         self.assertGreaterEqual(len(reviewer_dels), 1, "Reviewer 1 deletion must not be accepted or removed")
 
-        # Verify Co-Scientist additions are layered on top
-        co_inss = body.xpath('.//w:ins[@w:author="Co-Scientist"]')
-        co_dels = body.xpath('.//w:del[@w:author="Co-Scientist"]')
-        self.assertGreaterEqual(len(co_inss), 1, "Co-Scientist insertion must be present")
-        self.assertGreaterEqual(len(co_dels), 1, "Co-Scientist deletion must be present")
+        # Verify Vidhi Dhaduk additions are layered on top
+        vd_inss = body.xpath('.//w:ins[@w:author="Vidhi Dhaduk"]')
+        vd_dels = body.xpath('.//w:del[@w:author="Vidhi Dhaduk"]')
+        self.assertGreaterEqual(len(vd_inss), 1, "Vidhi Dhaduk insertion must be present")
+        self.assertGreaterEqual(len(vd_dels), 1, "Vidhi Dhaduk deletion must be present")
 
     def test_37_clinical_patient_count_statement_rejection(self):
         """Verifies that numbered clinical patient count statements are never parsed as references."""
@@ -1158,7 +1218,7 @@ class TestZoteroLinkEngine(unittest.TestCase):
             output_target=out_buf,
             renumber_ama=True,
             track_changes=True,
-            author="Co-Scientist"
+            author="Vidhi Dhaduk"
         )
         out_buf.seek(0)
 
@@ -1171,7 +1231,7 @@ class TestZoteroLinkEngine(unittest.TestCase):
         self.assertIn("w:ins", xml_str)
 
     def test_41_in_document_audit_table_generation(self):
-        """Verifies that the Co-Scientist Reference Audit & Reachability Ledger table is generated at the end of the manuscript."""
+        """Verifies that the Vidhi Dhaduk Reference Audit & Reachability Ledger table can be generated when explicitly requested."""
         from server.parser import parse_docx_manuscript
         from server.linker import link_docx_manuscript
         from server.models import ValidationVerdict
@@ -1206,7 +1266,7 @@ class TestZoteroLinkEngine(unittest.TestCase):
 
         out_doc = docx.Document(out_buf)
         # Verify ledger heading exists
-        heading_found = any("Co-Scientist Reference Audit & Reachability Ledger" in p.text for p in out_doc.paragraphs)
+        heading_found = any("Vidhi Dhaduk Reference Audit & Reachability Ledger" in p.text for p in out_doc.paragraphs)
         self.assertTrue(heading_found, "Ledger heading must be present in output document")
 
         # Verify audit table exists and has 5 columns
@@ -1235,10 +1295,11 @@ class TestZoteroLinkEngine(unittest.TestCase):
         from docx.oxml.ns import qn
 
         # 1. Clean mode on sample radiology manuscript
-        doc_path = "sample_radiology_manuscript.docx"
-        paras, sites, refs = parse_docx_manuscript(doc_path)
+        doc_buf = build_synthetic_sample_manuscript()
+        paras, sites, refs = parse_docx_manuscript(doc_buf)
+        doc_buf.seek(0)
         out_buf = BytesIO()
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_buf, track_changes=False)
+        link_docx_manuscript(doc_buf, sites, refs, output_target=out_buf, track_changes=False)
         out_buf.seek(0)
         doc_clean = docx.Document(out_buf)
 
@@ -1275,7 +1336,7 @@ class TestZoteroLinkEngine(unittest.TestCase):
 
         # 2. Tracked Changes mode parity
         out_tracked_buf = BytesIO()
-        link_docx_manuscript(doc_path, sites, refs, output_target=out_tracked_buf, track_changes=True)
+        link_docx_manuscript(build_synthetic_sample_manuscript(), sites, refs, output_target=out_tracked_buf, track_changes=True)
         out_tracked_buf.seek(0)
         doc_tracked = docx.Document(out_tracked_buf)
 
@@ -1776,6 +1837,63 @@ class TestZoteroLinkEngine(unittest.TestCase):
         _, dash_sites, _ = parse_docx_manuscript(dash_buf)
         self.assertEqual(len(dash_sites), 1)
         self.assertEqual(dash_sites[0].nums, [1, 2, 3], "En-dash 1\u20133 must expand to [1, 2, 3]")
+
+    def test_47_clean_copy_has_zero_audit_tables_by_default(self):
+        """Verifies that the linked output document NEVER appends an audit ledger table by default."""
+        from server.parser import parse_docx_manuscript
+        from server.linker import link_docx_manuscript
+        from server.models import ValidationVerdict
+
+        doc = docx.Document()
+        doc.add_paragraph("Clinical findings in neuroradiology are robust (1).")
+        doc.add_paragraph("REFERENCES")
+        doc.add_paragraph("1. Smith J. Diagnostic AI. Radiology 2020. doi: 10.1148/radiol.20200001")
+
+        in_buf = BytesIO()
+        doc.save(in_buf)
+        in_buf.seek(0)
+
+        paras, sites, refs = parse_docx_manuscript(in_buf, citation_format="paren")
+        verdicts = {
+            1: ValidationVerdict(ref_num=1, status="verified", is_reachable=True, doi="10.1148/radiol.20200001")
+        }
+
+        # 1. Clean linking (default include_audit_ledger=False)
+        out_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            verdicts=verdicts,
+            output_target=out_buf,
+            renumber_ama=True,
+            track_changes=False
+        )
+        out_buf.seek(0)
+        out_doc = docx.Document(out_buf)
+        self.assertEqual(len(out_doc.tables), 0, "Clean document must contain ZERO tables")
+        self.assertFalse(any("Reference Audit & Reachability Ledger" in p.text for p in out_doc.paragraphs))
+
+        # 2. Tracked linking (default author='Vidhi Dhaduk', default include_audit_ledger=False)
+        out_tracked_buf = BytesIO()
+        link_docx_manuscript(
+            BytesIO(in_buf.getvalue()),
+            sites, refs,
+            verdicts=verdicts,
+            output_target=out_tracked_buf,
+            renumber_ama=True,
+            track_changes=True
+        )
+        out_tracked_buf.seek(0)
+        tracked_doc = docx.Document(out_tracked_buf)
+        self.assertEqual(len(tracked_doc.tables), 0, "Tracked document must contain ZERO tables")
+        self.assertFalse(any("Reference Audit & Reachability Ledger" in p.text for p in tracked_doc.paragraphs))
+        
+        # Verify track changes author defaults to 'Vidhi Dhaduk'
+        body = tracked_doc._body._element
+        ins_nodes = body.xpath('.//w:ins')
+        self.assertGreaterEqual(len(ins_nodes), 1)
+        for ins in ins_nodes:
+            self.assertEqual(ins.get(qn('w:author')), "Vidhi Dhaduk")
 
 if __name__ == "__main__":
     unittest.main()

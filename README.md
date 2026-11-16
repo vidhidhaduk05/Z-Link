@@ -1,4 +1,4 @@
-# Co-Scientist Reference Auditor & Zotero Linker
+# Vidhi Dhaduk Reference Auditor & Zotero Linker
 
 An academic editorial platform for auditing biomedical and scholarly manuscripts, validating DOI reachability against Crossref and PubMed, mapping in-text citation usage down to the exact sentence, and injecting native Zotero Word field codes (`ADDIN ZOTERO_ITEM`, `ADDIN ZOTERO_BIBL`, `ADDIN ZOTERO_PREF_1`) into `.docx` files.
 
@@ -41,7 +41,7 @@ This repository is pre-configured to be hosted directly on **GitHub Pages**:
    ```bash
    git init
    git add .
-   git commit -m "Deploy Co-Scientist Reference Auditor & Zotero Linker"
+   git commit -m "Deploy Vidhi Dhaduk Reference Auditor & Zotero Linker"
    git branch -M main
    git remote add origin https://github.com/<your-username>/<your-repo-name>.git
    git push -u origin main
